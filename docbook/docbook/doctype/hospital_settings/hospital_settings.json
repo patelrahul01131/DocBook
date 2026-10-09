@@ -1,0 +1,87 @@
+{
+ "actions": [],
+ "creation": "2026-10-09 09:01:16.167047",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "opening_time",
+  "closing_time",
+  "appointment_duration",
+  "buffer_minutes",
+  "booking_window_days",
+  "minimum_booking_notice",
+  "weekly_holidays"
+ ],
+ "fields": [
+  {
+   "default": "09:00:00",
+   "fieldname": "opening_time",
+   "fieldtype": "Time",
+   "label": "Opening Time"
+  },
+  {
+   "default": "17:00:00",
+   "fieldname": "closing_time",
+   "fieldtype": "Time",
+   "label": "Closing Time"
+  },
+  {
+   "default": "30",
+   "fieldname": "appointment_duration",
+   "fieldtype": "Int",
+   "label": "Appointment Duration (Minutes)"
+  },
+  {
+   "default": "0",
+   "fieldname": "buffer_minutes",
+   "fieldtype": "Int",
+   "label": "Buffer Minutes"
+  },
+  {
+   "default": "30",
+   "fieldname": "booking_window_days",
+   "fieldtype": "Int",
+   "label": "Booking Window (Days)"
+  },
+  {
+   "default": "60",
+   "fieldname": "minimum_booking_notice",
+   "fieldtype": "Int",
+   "label": "Minimum Booking Notice (Minutes)"
+  },
+  {
+   "default": "Sunday",
+   "fieldname": "weekly_holidays",
+   "fieldtype": "Table",
+   "label": "Weekly Holidays",
+   "options": "Hospital Weekly Holiday"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-09 09:12:53.419194",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Hospital Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
