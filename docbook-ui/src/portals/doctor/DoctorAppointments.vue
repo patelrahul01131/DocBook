@@ -6,7 +6,7 @@
 </template>
 
 <script setup>
-import { call } from "../api.js";
+import { call } from "../../api.js";
 
 const doctor_name = "bhagyesh";
 const appointments = ref([]);

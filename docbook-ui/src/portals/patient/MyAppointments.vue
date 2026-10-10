@@ -46,6 +46,18 @@
 			</div>
 
 
+			<div v-else-if="!auth.user?.email">
+				Please login to view your appointments.
+				<button
+					class="primary-btn"
+					@click="redirectLogin"
+				>
+					Login
+					<span>→</span>
+				</button>
+			</div>
+
+
 			<!-- Error -->
 			<div v-else-if="error" class="state-card error-state">
 				<div class="state-icon">!</div>
@@ -190,7 +202,7 @@
 
 									<div class="detail-item">
 										<div class="detail-icon">
-											<!-- your calendar SVG -->
+											<span class="lucide lucide-calendar"></span>
 										</div>
 
 										<div>
@@ -205,7 +217,7 @@
 
 									<div class="detail-item">
 										<div class="detail-icon">
-											<!-- your clock SVG -->
+											<span class="lucide lucide-clock"></span>
 										</div>
 
 										<div>
@@ -220,7 +232,7 @@
 
 									<div class="detail-item">
 										<div class="detail-icon">
-											<!-- your slot SVG -->
+											<span class="lucide lucide-book-check"></span>
 										</div>
 
 										<div>
@@ -264,8 +276,8 @@
 <script setup>
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
-import { call } from "../api";
-import { useAuthStore } from "../stores/auth";
+import { call } from "../../api";
+import { useAuthStore } from "../../stores/auth";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -273,6 +285,10 @@ const router = useRouter();
 const appointments = ref([]);
 const loading = ref(false);
 const error = ref(null);
+
+function redirectLogin() {
+	router.push("/login");
+}
 
 
 async function fetchAppointments() {
@@ -283,13 +299,12 @@ async function fetchAppointments() {
 		const res = await call(
 			"docbook.api.appointment.list_appointment",
 			{
-				patient: auth.user.email
+				patient: auth.user?.email
 			}
 		);
 
 		appointments.value = res || [];
 
-		console.log(appointments.value);
 	} catch (err) {
 		console.error(err);
 		error.value = "Unable to load your appointments.";
@@ -371,7 +386,7 @@ function getDoctorInitial(email) {
 
 
 function goToDoctors() {
-	router.push("/find-doctors");
+	router.push("/home");
 }
 
 

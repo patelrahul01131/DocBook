@@ -8,8 +8,8 @@ import {
 
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { call } from '../api'
-import { useAuthStore } from '../stores/auth'
+import { call } from '../../api'
+import { useAuthStore } from '../../stores/auth'
 
 const auth = useAuthStore()
 

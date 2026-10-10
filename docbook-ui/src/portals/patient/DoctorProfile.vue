@@ -641,8 +641,8 @@ import {
   useRouter
 } from 'vue-router'
 
-import { call } from '../api'
-import { useAuthStore } from '../stores/auth'
+import { call } from '../../api'
+import { useAuthStore } from '../../stores/auth'
 import { toast } from 'frappe-ui'
 
 const route = useRoute()
@@ -816,11 +816,6 @@ async function confirmBooking(close) {
       }
     )
 
-    console.log(
-      'Appointment created:',
-      response
-    )
-
     close()
 
     toast.success('Appointment created successfully')
@@ -833,6 +828,8 @@ async function confirmBooking(close) {
       'Failed to create appointment:',
       error
     )
+
+    toast.error("Failed to create appointment")
 
   } finally {
 

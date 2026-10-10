@@ -1,62 +1,79 @@
 
 <script setup>
-import { ref } from "vue";
-import { useRouter } from "vue-router";
-import { loginUser, signupPatient } from "../stores/auth";
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { signupPatient } from '../stores/auth'
+import { useAuthStore } from '../stores/auth'
 
-const router = useRouter();
+const router = useRouter()
+const auth = useAuthStore()
 
-const isSignup = ref(false);
-const loading = ref(false);
-const error = ref("");
-const success = ref("");
+const isSignup = ref(false)
+const loading = ref(false)
+const error = ref('')
+const success = ref('')
 
 const form = ref({
-  full_name: "",
-  email: "",
-  password: "",
-  phone: ""
-});
+  full_name: '',
+  email: '',
+  password: '',
+  phone: ''
+})
 
 async function submitForm() {
-  loading.value = true;
-  error.value = "";
-  success.value = "";
+  loading.value = true
+  error.value = ''
+  success.value = ''
 
   try {
     if (isSignup.value) {
-      await signupPatient(form.value);
+      await signupPatient(form.value)
 
-      success.value = "Account created! Please log in.";
-      isSignup.value = false;
-      form.value.password = "";
+      success.value = 'Account created! Please log in.'
+      isSignup.value = false
+      form.value.password = ''
     } else {
-      const profile = await loginUser(
+      // Authenticate and update the Pinia store.
+      const profile = await auth.login(
         form.value.email,
         form.value.password
-      );
+      )
 
-      await router.push(profile.redirect);
+      // Redirect using the role returned by the backend.
+      if (profile.role === 'Doctor') {
+        await router.push('/doctor')
+      } else if (profile.role === 'Patient') {
+        await router.push('/home')
+      } else {
+        await router.push('/')
+      }
     }
   } catch (err) {
     error.value =
-      err.message || "Something went wrong. Please try again.";
+      err.message || 'Something went wrong. Please try again.'
   } finally {
-    loading.value = false;
+    loading.value = false
   }
+}
+
+function toggleMode() {
+  isSignup.value = !isSignup.value
+  error.value = ''
+  success.value = ''
+  form.value.password = ''
 }
 </script>
 
 <template>
   <main class="auth-page">
     <section class="auth-card">
-      <h1>{{ isSignup ? "Create Patient Account" : "Welcome Back" }}</h1>
+      <h1>{{ isSignup ? 'Create Patient Account' : 'Welcome Back' }}</h1>
 
       <p>
         {{
           isSignup
-            ? "Register to book doctor appointments."
-            : "Log in to continue to DocBook."
+            ? 'Register to book doctor appointments.'
+            : 'Log in to continue to DocBook.'
         }}
       </p>
 
@@ -107,27 +124,23 @@ async function submitForm() {
         <button type="submit" :disabled="loading">
           {{
             loading
-              ? "Please wait..."
+              ? 'Please wait...'
               : isSignup
-                ? "Create Account"
-                : "Log In"
+                ? 'Create Account'
+                : 'Log In'
           }}
         </button>
       </form>
 
       <p class="switch-mode">
-        {{
-          isSignup
-            ? "Already have an account?"
-            : "New to DocBook?"
-        }}
+        {{ isSignup ? 'Already have an account?' : 'New to DocBook?' }}
 
         <button
           type="button"
           class="text-button"
-          @click="isSignup = !isSignup; error = ''; success = ''"
+          @click="toggleMode"
         >
-          {{ isSignup ? "Log In" : "Sign Up as Patient" }}
+          {{ isSignup ? 'Log In' : 'Sign Up as Patient' }}
         </button>
       </p>
 

@@ -1,5 +1,5 @@
 <script setup>
-import { call } from '../api'
+import { call } from '../../api'
 import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 

@@ -64,53 +64,89 @@ import frappe
 from frappe import _
 
 
-@frappe.whitelist()
-def get_current_user():
-    email = frappe.session.user
 
-    if email == "Guest":
-        frappe.throw(_("Please log in first"))
+import frappe
+
+
+@frappe.whitelist(allow_guest=True)
+def get_current_user():
+    current_user = frappe.session.user
+
+    # A guest is a valid state, not an authentication error.
+    if not current_user or current_user == "Guest":
+        return {
+            "logged_in": False,
+            "is_guest": True,
+            "user": None,
+            "email": None,
+            "full_name": None,
+            "role": None,
+        }
 
     user_data = frappe.db.get_value(
         "User",
-        email,
+        current_user,
         ["email", "full_name", "user_image"],
-        as_dict=True
+        as_dict=True,
     )
 
     if not user_data:
-        frappe.throw(_("User account not found"))
+        return {
+            "logged_in": False,
+            "is_guest": True,
+            "user": None,
+            "email": None,
+            "full_name": None,
+            "role": None,
+        }
 
-    doctor = frappe.db.exists(
+    # Identify the user's DocBook profile from the database.
+    doctor = frappe.db.get_value(
         "Doctor Profile",
-        {"user": email}
+        {"user": current_user},
+        ["name", "full_name", "phone"],
+        as_dict=True,
     )
 
     if doctor:
         role = "Doctor"
-        redirect = "/doctor"
+        profile_name = doctor.name
+        full_name = doctor.full_name or user_data.full_name
+        phone = doctor.phone
     else:
-        patient = frappe.db.exists(
+        patient = frappe.db.get_value(
             "Patient Profile",
-            {"user": email}
+            {"user": current_user},
+            ["name", "full_name", "phone"],
+            as_dict=True,
         )
 
         if patient:
             role = "Patient"
-            redirect = "/find-doctors"
+            profile_name = patient.name
+            full_name = patient.full_name or user_data.full_name
+            phone = patient.phone
         else:
-            frappe.throw(
-                _("No DocBook profile is linked to this account")
-            )
+            # Authenticated Frappe user without a DocBook profile.
+            role = "User"
+            profile_name = None
+            full_name = user_data.full_name
+            phone = None
 
     return {
+        "logged_in": True,
+        "is_guest": False,
+        "user": current_user,
         "email": user_data.email,
-        "full_name": user_data.full_name,
+        "full_name": full_name,
         "user_image": user_data.user_image,
         "role": role,
-        "redirect": redirect
+        "profile_name": profile_name,
+        "phone": phone,
     }
 
+
+    
 
 @frappe.whitelist()
 def logout_user():
