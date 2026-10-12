@@ -1,0 +1,152 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:medicine_name",
+ "creation": "2026-10-10 12:13:14.736238",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "medicine_name",
+  "generic_name",
+  "brand_name",
+  "medicine_category",
+  "strength",
+  "dosage_form",
+  "description",
+  "uses",
+  "how_it_works",
+  "common_side_effects",
+  "precautions",
+  "storage_instructions",
+  "information_source",
+  "is_active",
+  "medicine_image"
+ ],
+ "fields": [
+  {
+   "fieldname": "medicine_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Medicine Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "generic_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Generic Name",
+   "reqd": 1
+  },
+  {
+   "fieldname": "brand_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Brand Name"
+  },
+  {
+   "fieldname": "medicine_category",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Medicine Category",
+   "options": "Analgesic\nAntibiotic\nAntihistamine\nAntacid\nAntidiabetic\nAntihypertensive\nVitamin/Supplement\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "strength",
+   "fieldtype": "Data",
+   "label": "Strength"
+  },
+  {
+   "fieldname": "dosage_form",
+   "fieldtype": "Select",
+   "label": "Dosage Form",
+   "options": "Tablet\nCapsule\nSyrup\nInjection\nCream\nOintment\nDrops\nInhaler\nOther"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Text Editor",
+   "label": "Description"
+  },
+  {
+   "fieldname": "uses",
+   "fieldtype": "Small Text",
+   "label": "Uses"
+  },
+  {
+   "fieldname": "how_it_works",
+   "fieldtype": "Text Editor",
+   "label": "How It Works"
+  },
+  {
+   "fieldname": "common_side_effects",
+   "fieldtype": "Small Text",
+   "label": "Common Side Effects"
+  },
+  {
+   "fieldname": "precautions",
+   "fieldtype": "Text Editor",
+   "label": "Precautions"
+  },
+  {
+   "fieldname": "storage_instructions",
+   "fieldtype": "Small Text",
+   "label": "Storage Instructions"
+  },
+  {
+   "fieldname": "information_source",
+   "fieldtype": "Data",
+   "label": "Information Source"
+  },
+  {
+   "default": "1",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "medicine_image",
+   "fieldtype": "Attach Image",
+   "label": "Medicine Image"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-10 13:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Medicine",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Doctor"
+  },
+  {
+   "read": 1,
+   "role": "Patient"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "generic_name,brand_name,medicine_category",
+ "sort_field": "medicine_name",
+ "sort_order": "ASC",
+ "states": [],
+ "track_changes": 1
+}

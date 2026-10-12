@@ -1,978 +1,956 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { Badge, Button } from 'frappe-ui'
 import { useRouter } from 'vue-router'
+import { Badge, Button } from 'frappe-ui'
 import { call } from '../../api'
+import { useAuthStore } from '../../stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 
-const doctors = ref([])
-const searchQuery = ref('')
-const loading = ref(false)
+const loading = ref(true)
 const refreshing = ref(false)
 const error = ref('')
 
-const fetchDoctors = async (isRefresh = false) => {
+const doctor = ref(null)
+const stats = ref({
+  total: 0, pending: 0, confirmed: 0, completed: 0,
+  cancelled: 0, today: 0, upcoming: 0, earnings: 0,
+})
+const todayAppointments = ref([])
+const upcomingAppointments = ref([])
+const recentPatients = ref([])
+const uniquePatients = ref(0)
+
+// ---------------------------------------------------------------
+// Derived values
+// ---------------------------------------------------------------
+
+const doctorName = computed(() => {
+  const user = auth.user || {}
+  return (
+    doctor.value?.full_name ||
+    user.full_name ||
+    (user.email ? user.email.split('@')[0] : 'Doctor')
+  )
+})
+
+const firstName = computed(() => {
+  const parts = String(doctorName.value).trim().split(/\s+/)
+  const clean = parts.filter((p) => !/^dr\.?$/i.test(p))
+  return (clean[0] || parts[0] || 'Doctor').replace(/\.$/, '')
+})
+
+const greeting = computed(() => {
+  const h = new Date().getHours()
+  if (h < 12) return 'Good morning'
+  if (h < 17) return 'Good afternoon'
+  return 'Good evening'
+})
+
+const doctorInitials = computed(() => {
+  const name = doctorName.value.replace(/^dr\.?\s+/i, '')
+  const parts = name.split(/\s+/).filter(Boolean)
+  if (!parts.length) return 'DR'
+  return parts.map((p) => p[0]).join('').slice(0, 2).toUpperCase()
+})
+
+const todayLabel = computed(() =>
+  new Date().toLocaleDateString('en-IN', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  })
+)
+
+const formattedEarnings = computed(() => {
+  const n = Number(stats.value.earnings || 0)
+  if (!n) return '₹0'
+  return `₹${n.toLocaleString('en-IN')}`
+})
+
+// ---------------------------------------------------------------
+// Data
+// ---------------------------------------------------------------
+
+async function fetchDashboard(isRefresh = false) {
   if (isRefresh) {
     refreshing.value = true
   } else {
     loading.value = true
   }
-
   error.value = ''
 
   try {
-    const result = await call('docbook.api.doctor.list_doctors')
-    doctors.value = Array.isArray(result) ? result : []
+    const res = await call('docbook.api.doctor.get_doctor_dashboard')
+
+    if (!res) {
+      throw new Error('No dashboard data returned.')
+    }
+
+    doctor.value = res.doctor || null
+    stats.value = { ...stats.value, ...(res.stats || {}) }
+    uniquePatients.value = res.unique_patients || 0
+    todayAppointments.value = Array.isArray(res.today_appointments)
+      ? res.today_appointments
+      : []
+    upcomingAppointments.value = Array.isArray(res.upcoming_appointments)
+      ? res.upcoming_appointments
+      : []
+    recentPatients.value = Array.isArray(res.recent_patients)
+      ? res.recent_patients
+      : []
   } catch (err) {
-    console.error('Failed to load doctors:', err)
-    error.value = 'Unable to load doctors. Please try again.'
+    error.value = err?.message || 'Unable to load your dashboard. Please try again.'
   } finally {
     loading.value = false
     refreshing.value = false
   }
 }
 
-const filteredDoctors = computed(() => {
-  const query = searchQuery.value.trim().toLowerCase()
+// ---------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------
 
-  if (!query) return doctors.value
-
-  return doctors.value.filter((doctor) => {
-    const searchable = [
-      doctor.full_name,
-      doctor.doctor_name,
-      doctor.name,
-      doctor.specialty,
-      doctor.qualification,
-    ]
-
-    return searchable.some((value) =>
-      String(value || '').toLowerCase().includes(query)
-    )
-  })
-})
-
-const specialtyCount = computed(() => {
-  return new Set(
-    doctors.value
-      .map((doctor) => doctor.specialty?.trim())
-      .filter(Boolean)
-      .map((specialty) => specialty.toLowerCase())
-  ).size
-})
-
-const averageRating = computed(() => {
-  const ratings = doctors.value
-    .map((doctor) => Number(doctor.rating))
-    .filter((rating) => Number.isFinite(rating) && rating > 0)
-
-  if (!ratings.length) return null
-
-  return (
-    ratings.reduce((total, rating) => total + rating, 0) /
-    ratings.length
-  ).toFixed(1)
-})
-
-const doctorName = (doctor) =>
-  doctor.full_name || doctor.doctor_name || doctor.name || 'Doctor'
-
-const formatFee = (fee) => {
-  const amount = Number(fee)
-
-  if (fee == null || fee === '' || !Number.isFinite(amount)) {
-    return 'Not specified'
-  }
-
-  return new Intl.NumberFormat('en-IN', {
-    style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 2,
-  }).format(amount)
+function formatTime(t) {
+  if (!t) return '—'
+  const [h, m] = String(t).split(':')
+  const hour = parseInt(h, 10)
+  if (Number.isNaN(hour)) return t
+  const ampm = hour >= 12 ? 'PM' : 'AM'
+  const displayHour = hour % 12 || 12
+  return `${displayHour}:${(m || '00').slice(0, 2)} ${ampm}`
 }
 
-const viewDoctor = (doctor) => {
-  const identifier = doctor.user || doctor.name
-
-  if (!identifier) return
-
-  router.push({
-    path: '/doctor_profile',
-    query: { doctor: identifier },
-  })
+function formatFee(fee) {
+  const n = Number(fee || 0)
+  return n ? `₹${n.toLocaleString('en-IN')}` : 'Free'
 }
 
-const findDoctors = () => {
-  router.push('/find-doctors')
+function statusClass(status) {
+  return `status-${(status || 'pending').toLowerCase()}`
+}
+
+function badgeTheme(status) {
+  const s = (status || '').toLowerCase()
+  if (s === 'confirmed') return 'green'
+  if (s === 'completed') return 'blue'
+  if (s === 'cancelled') return 'red'
+  return 'amber'
+}
+
+function getInitials(name) {
+  if (!name) return 'PT'
+  return name.split(/\s+/).map((n) => n[0]).join('').slice(0, 2).toUpperCase()
+}
+
+function dayNum(d) {
+  const dt = new Date(`${String(d).slice(0, 10)}T00:00:00`)
+  return Number.isNaN(dt.getTime()) ? '–' : dt.getDate()
+}
+
+function monthShort(d) {
+  const dt = new Date(`${String(d).slice(0, 10)}T00:00:00`)
+  return Number.isNaN(dt.getTime()) ? '' : dt.toLocaleString('en-IN', { month: 'short' })
+}
+
+function isNowOrPast(appt) {
+  const t = appt.appointment_time || '00:00:00'
+  const dt = new Date(`${String(appt.appointment_date).slice(0, 10)}T${t}`)
+  return !Number.isNaN(dt.getTime()) && dt <= new Date()
+}
+
+function openConsultation(appt) {
+  if (appt?.name) router.push(`/consultation/${appt.name}`)
+}
+
+function go(path) {
+  router.push(path)
 }
 
 onMounted(() => {
-  fetchDoctors()
+  fetchDashboard()
 })
 </script>
 
 <template>
-  <main class="dashboard-page">
-    <div class="dashboard-shell">
+  <main class="dd-page">
+    <div class="dd-shell">
 
-      <!-- Header -->
-      <header class="dashboard-header">
-        <div class="heading-copy">
-          <div class="eyebrow">
-            <span class="lucide-layout-dashboard"></span>
-            DOCBOOK / OVERVIEW
+      <!-- ============ Welcome header ============ -->
+      <header class="dd-hero">
+        <div class="dd-hero-glow" aria-hidden="true"></div>
+
+        <div class="dd-hero-copy">
+          <div class="dd-eyebrow">
+            <span class="lucide-stethoscope"></span>
+            DOCTOR PORTAL
           </div>
 
-          <h1>Doctor Dashboard<span>.</span></h1>
+          <h1>{{ greeting }}, Dr. {{ firstName }}<span class="dot">.</span></h1>
+          <p class="dd-hero-sub">{{ todayLabel }} — here's your practice at a glance.</p>
 
-          <p>
-            Manage your doctor directory and explore healthcare
-            professionals in one place.
-          </p>
+          <div class="dd-hero-badges" v-if="doctor">
+            <span v-if="doctor.specialty" class="dd-chip">
+              <span class="lucide-badge-check"></span>
+              {{ doctor.specialty }}
+            </span>
+            <span v-if="doctor.qualification" class="dd-chip dd-chip--muted">
+              {{ doctor.qualification }}
+            </span>
+            <span v-if="doctor.experience_years" class="dd-chip dd-chip--muted">
+              {{ doctor.experience_years }} yrs exp
+            </span>
+            <span v-if="doctor.is_approved" class="dd-chip dd-chip--success">
+              <span class="lucide-shield-check"></span>
+              Approved
+            </span>
+          </div>
         </div>
 
-        <div class="header-actions">
-          <Button
-            label="Refresh"
-            icon-left="lucide-refresh-cw"
-            :loading="refreshing"
-            :disabled="loading || refreshing"
-            @click="fetchDoctors(true)"
-          />
-
-          <Button
-            label="Find doctors"
-            icon-left="lucide-arrow-up-right"
-            @click="findDoctors"
-          />
+        <div class="dd-hero-side">
+          <div class="dd-avatar">
+            <img v-if="doctor && doctor.profile_image" :src="doctor.profile_image" :alt="doctorName" />
+            <span v-else class="dd-avatar-fallback">{{ doctorInitials }}</span>
+          </div>
+          <div class="dd-hero-actions">
+            <Button
+              label="Appointments"
+              icon-left="lucide-calendar-check"
+              @click="go('/doctor-appointments')"
+            />
+            <Button
+              :loading="refreshing"
+              :disabled="loading || refreshing"
+              icon-left="lucide-refresh-cw"
+              @click="fetchDashboard(true)"
+            >
+              Refresh
+            </Button>
+          </div>
         </div>
       </header>
 
-      <!-- Summary cards -->
-      <section class="stats-grid" aria-label="Dashboard statistics">
-
-        <article class="stat-card">
-          <div class="stat-top">
-            <span class="stat-icon blue">
-              <span class="lucide-users"></span>
-            </span>
-            <Badge theme="blue">Directory</Badge>
-          </div>
-
-          <p class="stat-label">Total doctors</p>
-
-          <h2>
-            {{ loading ? '—' : doctors.length }}
-          </h2>
-
-          <p class="stat-caption">Doctors returned by the directory API</p>
-        </article>
-
-        <article class="stat-card">
-          <div class="stat-top">
-            <span class="stat-icon teal">
-              <span class="lucide-stethoscope"></span>
-            </span>
-            <Badge theme="green">Specialties</Badge>
-          </div>
-
-          <p class="stat-label">Specialties covered</p>
-
-          <h2>{{ loading ? '—' : specialtyCount }}</h2>
-
-          <p class="stat-caption">Distinct specialties in the directory</p>
-        </article>
-
-        <article class="stat-card">
-          <div class="stat-top">
-            <span class="stat-icon amber">
-              <span class="lucide-star"></span>
-            </span>
-            <Badge>Patient ratings</Badge>
-          </div>
-
-          <h2 class="rating-number">
-            {{ loading ? '—' : averageRating ?? '—' }}
-            <span v-if="averageRating" class="rating-star">★</span>
-          </h2>
-
-          <p class="stat-caption">
-            Average of available doctor ratings
-          </p>
-        </article>
+      <!-- ============ Error ============ -->
+      <section v-if="error" class="dd-error">
+        <span class="lucide-circle-alert"></span>
+        <div class="dd-error-copy">
+          <strong>Unable to load your dashboard</strong>
+          <p>{{ error }}</p>
+        </div>
+        <Button label="Try again" @click="fetchDashboard()" />
       </section>
 
-      <!-- Directory -->
-      <section class="directory-section">
-        <div class="section-heading">
-          <div>
-            <div class="eyebrow">YOUR DIRECTORY</div>
-            <h2>Explore doctors</h2>
-            <p>Find the right professional for your healthcare needs.</p>
-          </div>
-
-          <Badge>{{ filteredDoctors.length }} results</Badge>
-        </div>
-
-        <div class="toolbar">
-          <div class="search-box">
-            <span class="lucide-search search-icon"></span>
-            <Input
-              v-model="searchQuery"
-              placeholder="Search name, specialty or qualification..."
-              class="doctor-search border-none outline-none"
-            />
-            <button
-              v-if="searchQuery"
-              class="clear-search"
-              type="button"
-              aria-label="Clear search"
-              @click="searchQuery = ''"
-            >
-              <span class="lucide-x"></span>
-            </button>
-          </div>
-        </div>
-
-        <!-- Error -->
-        <div v-if="error" class="feedback-card error-card">
-          <span class="lucide-circle-alert feedback-icon"></span>
-          <div>
-            <h3>Something went wrong</h3>
-            <p>{{ error }}</p>
-          </div>
-          <Button
-            label="Try again"
-            icon-left="lucide-refresh-cw"
-            @click="fetchDoctors()"
-          />
-        </div>
-
-        <!-- Loading skeletons -->
-        <div v-else-if="loading" class="doctor-grid">
-          <div
-            v-for="item in 6"
-            :key="item"
-            class="doctor-card skeleton-card"
-          >
-            <div class="skeleton skeleton-avatar"></div>
-            <div class="skeleton skeleton-line wide"></div>
-            <div class="skeleton skeleton-line"></div>
-            <div class="skeleton skeleton-block"></div>
-          </div>
-        </div>
-
-        <!-- Empty directory -->
-        <div
-          v-else-if="!doctors.length"
-          class="feedback-card empty-card"
-        >
-          <span class="lucide-stethoscope feedback-icon"></span>
-          <h3>No doctors available yet</h3>
-          <p>
-            Doctor profiles will appear here when they are returned by
-            your API.
-          </p>
-          <Button
-            label="Refresh directory"
-            icon-left="lucide-refresh-cw"
-            @click="fetchDoctors()"
-          />
-        </div>
-
-        <!-- No search results -->
-        <div
-          v-else-if="!filteredDoctors.length"
-          class="feedback-card empty-card"
-        >
-          <span class="lucide-search feedback-icon"></span>
-          <h3>No matching doctors</h3>
-          <p>Try another name, specialty or qualification.</p>
-          <Button
-            label="Clear search"
-            @click="searchQuery = ''"
-          />
-        </div>
-
-        <!-- Doctor cards -->
-        <div v-else class="doctor-grid">
-          <article
-            v-for="(doctor, index) in filteredDoctors"
-            :key="doctor.name || doctor.user || index"
-            class="doctor-card"
-          >
-            <div class="doctor-card-top">
-              <div class="doctor-avatar">
-                <span class="lucide-user-round"></span>
-              </div>
-
-              <Badge theme="blue">
-                {{ doctor.specialty || 'General practice' }}
-              </Badge>
-            </div>
-
-            <h3 class="doctor-name">{{ doctorName(doctor) }}</h3>
-
-            <p class="doctor-qualification">
-              {{ doctor.qualification || 'Qualification not specified' }}
-            </p>
-
-            <div class="doctor-details">
-              <div class="detail-row">
-                <span class="lucide-briefcase-medical"></span>
-                <span>Experience</span>
-                <strong>
-                  {{
-                    doctor.experience_years != null
-                      ? `${doctor.experience_years} years`
-                      : 'Not specified'
-                  }}
-                </strong>
-              </div>
-
-              <div class="detail-row">
-                <span class="lucide-star"></span>
-                <span>Rating</span>
-                <strong>
-                  {{
-                    doctor.rating != null && doctor.rating !== ''
-                      ? `★ ${doctor.rating}`
-                      : 'Not rated'
-                  }}
-                </strong>
-              </div>
-            </div>
-
-            <div class="doctor-card-footer">
-              <div class="fee-block">
-                <span>Consultation fee</span>
-                <strong>{{ formatFee(doctor.consultation_fee) }}</strong>
-              </div>
-
-              <Button
-                label="View profile"
-                icon-right="lucide-arrow-up-right"
-                @click="viewDoctor(doctor)"
-              />
-            </div>
+      <template v-else>
+        <!-- ============ Stat cards ============ -->
+        <section class="dd-stats">
+          <article class="dd-stat dd-stat--blue">
+            <div class="dd-stat-icon"><span class="lucide-calendar-days"></span></div>
+            <p class="dd-stat-label">Today's Appointments</p>
+            <h2 class="dd-stat-value">{{ loading ? '—' : stats.today }}</h2>
+            <span class="dd-stat-caption">Scheduled for today</span>
           </article>
+
+          <article class="dd-stat dd-stat--teal">
+            <div class="dd-stat-icon"><span class="lucide-clock-3"></span></div>
+            <p class="dd-stat-label">Upcoming</p>
+            <h2 class="dd-stat-value">{{ loading ? '—' : stats.upcoming }}</h2>
+            <span class="dd-stat-caption">Confirmed &amp; pending ahead</span>
+          </article>
+
+          <article class="dd-stat dd-stat--amber">
+            <div class="dd-stat-icon"><span class="lucide-hourglass"></span></div>
+            <p class="dd-stat-label">Pending</p>
+            <h2 class="dd-stat-value">{{ loading ? '—' : stats.pending }}</h2>
+            <span class="dd-stat-caption">Awaiting confirmation</span>
+          </article>
+
+          <article class="dd-stat dd-stat--green">
+            <div class="dd-stat-icon"><span class="lucide-users"></span></div>
+            <p class="dd-stat-label">Patients</p>
+            <h2 class="dd-stat-value">{{ loading ? '—' : uniquePatients }}</h2>
+            <span class="dd-stat-caption">Unique patients seen</span>
+          </article>
+
+          <article class="dd-stat dd-stat--purple">
+            <div class="dd-stat-icon"><span class="lucide-wallet"></span></div>
+            <p class="dd-stat-label">Earnings</p>
+            <h2 class="dd-stat-value">{{ loading ? '—' : formattedEarnings }}</h2>
+            <span class="dd-stat-caption">From completed visits</span>
+          </article>
+        </section>
+
+        <!-- ============ Main grid ============ -->
+        <div class="dd-grid">
+
+          <!-- Today's schedule -->
+          <section class="dd-panel dd-panel--wide">
+            <div class="dd-panel-head">
+              <div>
+                <div class="dd-eyebrow dd-eyebrow--dark">TODAY</div>
+                <h2 class="dd-panel-title">Today's Schedule</h2>
+              </div>
+              <button class="dd-text-link" type="button" @click="go('/doctor-appointments')">
+                View all <span class="lucide-arrow-up-right"></span>
+              </button>
+            </div>
+
+            <div v-if="loading" class="dd-list">
+              <div v-for="i in 3" :key="i" class="dd-skeleton"></div>
+            </div>
+
+            <div v-else-if="!todayAppointments.length" class="dd-empty">
+              <div class="dd-empty-icon"><span class="lucide-calendar-off"></span></div>
+              <h3>No appointments today</h3>
+              <p>Enjoy the breather — your next visits are listed below.</p>
+            </div>
+
+            <div v-else class="dd-list">
+              <article
+                v-for="appt in todayAppointments"
+                :key="appt.name"
+                class="dd-appt"
+                :class="{ 'dd-appt--past': isNowOrPast(appt) }"
+              >
+                <div class="dd-appt-time">
+                  <span class="dd-appt-hour">{{ formatTime(appt.appointment_time) }}</span>
+                  <span class="dd-appt-fee">{{ formatFee(appt.consultation_fee) }}</span>
+                </div>
+
+                <div class="dd-appt-avatar">{{ getInitials(appt.patient_name) }}</div>
+
+                <div class="dd-appt-body">
+                  <h3>{{ appt.patient_name || 'Patient' }}</h3>
+                  <p class="dd-appt-meta">
+                    <span v-if="appt.age">{{ appt.age }} yrs</span>
+                    <span v-if="appt.gender">• {{ appt.gender }}</span>
+                    <span v-if="appt.patient_phone">• {{ appt.patient_phone }}</span>
+                  </p>
+                  <p v-if="appt.reason" class="dd-appt-reason">
+                    <span class="lucide-message-square"></span> {{ appt.reason }}
+                  </p>
+                </div>
+
+                <div class="dd-appt-side">
+                  <Badge :theme="badgeTheme(appt.status)">
+                    {{ appt.status || 'Pending' }}
+                  </Badge>
+                  <button
+                    class="dd-btn dd-btn--primary dd-btn--sm"
+                    type="button"
+                    @click="openConsultation(appt)"
+                  >
+                    Consult
+                  </button>
+                </div>
+              </article>
+            </div>
+          </section>
+
+
+          <!-- Upcoming + recent patients column -->
+          <div class="dd-col">
+
+            <!-- Upcoming -->
+            <section class="dd-panel">
+              <div class="dd-panel-head">
+                <div>
+                  <div class="dd-eyebrow dd-eyebrow--dark">NEXT UP</div>
+                  <h2 class="dd-panel-title">Upcoming</h2>
+                </div>
+              </div>
+
+              <div v-if="loading" class="dd-list">
+                <div v-for="i in 3" :key="i" class="dd-skeleton dd-skeleton--sm"></div>
+              </div>
+
+              <div v-else-if="!upcomingAppointments.length" class="dd-empty dd-empty--sm">
+                <div class="dd-empty-icon"><span class="lucide-calendar-check"></span></div>
+                <h3>All clear</h3>
+                <p>No upcoming appointments queued.</p>
+              </div>
+
+              <div v-else class="dd-list">
+                <article v-for="appt in upcomingAppointments" :key="appt.name" class="dd-mini">
+                  <div class="dd-mini-date">
+                    <span class="dd-mini-day">{{ dayNum(appt.appointment_date) }}</span>
+                    <span class="dd-mini-mon">{{ monthShort(appt.appointment_date) }}</span>
+                  </div>
+                  <div class="dd-mini-body">
+                    <h3>{{ appt.patient_name || 'Patient' }}</h3>
+                    <p>{{ formatTime(appt.appointment_time) }}</p>
+                  </div>
+                  <span class="dd-mini-status" :class="statusClass(appt.status)">
+                    {{ appt.status || 'Pending' }}
+                  </span>
+                </article>
+              </div>
+            </section>
+
+            <!-- Recent patients -->
+            <section class="dd-panel">
+              <div class="dd-panel-head">
+                <div>
+                  <div class="dd-eyebrow dd-eyebrow--dark">DIRECTORY</div>
+                  <h2 class="dd-panel-title">Recent Patients</h2>
+                </div>
+                <button class="dd-text-link" type="button" @click="go('/doctor-patients')">
+                  All <span class="lucide-arrow-up-right"></span>
+                </button>
+              </div>
+
+              <div v-if="loading" class="dd-list">
+                <div v-for="i in 3" :key="i" class="dd-skeleton dd-skeleton--sm"></div>
+              </div>
+
+              <div v-else-if="!recentPatients.length" class="dd-empty dd-empty--sm">
+                <div class="dd-empty-icon"><span class="lucide-users"></span></div>
+                <h3>No patients yet</h3>
+                <p>Patients you treat will appear here.</p>
+              </div>
+
+              <div v-else class="dd-list">
+                <article v-for="p in recentPatients" :key="p.name" class="dd-mini">
+                  <div class="dd-mini-avatar">{{ getInitials(p.full_name) }}</div>
+                  <div class="dd-mini-body">
+                    <h3>{{ p.full_name || 'Patient' }}</h3>
+                    <p>
+                      <span v-if="p.age">{{ p.age }} yrs</span>
+                      <span v-if="p.gender"> • {{ p.gender }}</span>
+                      <span v-if="p.phone"> • {{ p.phone }}</span>
+                    </p>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
         </div>
-      </section>
 
-      <!-- Bottom banner -->
-      <section class="dashboard-banner">
-        <div class="banner-icon">
-          <span class="lucide-heart-pulse"></span>
-        </div>
-
-        <div class="banner-copy">
-          <h2>Healthcare made simpler.</h2>
-          <p>
-            Keep your doctor directory accessible and your patient
-            experience seamless with DocBook.
-          </p>
-        </div>
-
-        <Button
-          label="Open appointments"
-          icon-right="lucide-arrow-up-right"
-          @click="router.push('/my-appointments')"
-        />
-      </section>
-
-      <footer class="dashboard-footer">
-        <span>DocBook · Healthcare made simple</span>
-        <span>Doctor directory dashboard</span>
-      </footer>
-
+        <!-- ============ Quick actions ============ -->
+        <section class="dd-quick">
+          <button class="dd-quick-btn" type="button" @click="go('/doctor-appointments')">
+            <span class="dd-quick-icon dd-quick-icon--blue"><span class="lucide-calendar-check"></span></span>
+            <span>My Appointments</span>
+          </button>
+          <button class="dd-quick-btn" type="button" @click="go('/doctor-patients')">
+            <span class="dd-quick-icon dd-quick-icon--teal"><span class="lucide-users"></span></span>
+            <span>My Patients</span>
+          </button>
+          <button class="dd-quick-btn" type="button" @click="go('/medicines')">
+            <span class="dd-quick-icon dd-quick-icon--amber"><span class="lucide-book-open"></span></span>
+            <span>Medicine Catalog</span>
+          </button>
+          <button class="dd-quick-btn" type="button" @click="go('/home')">
+            <span class="dd-quick-icon dd-quick-icon--purple"><span class="lucide-search"></span></span>
+            <span>Find Doctors</span>
+          </button>
+        </section>
+      </template>
     </div>
   </main>
 </template>
 
+
 <style scoped>
-.dashboard-page {
-  --db-blue: #2563eb;
-  --db-teal: #0d9488;
-  --db-ink: #0f172a;
-  --db-muted: #64748b;
-  --db-border: rgba(226, 232, 240, 0.9);
-
+.dd-page {
   min-height: 100%;
-  padding: 36px 24px 28px;
-  color: var(--db-ink);
+  padding: 32px 28px 64px;
   background:
-    radial-gradient(ellipse at 0% 0%, rgba(37, 99, 235, .08), transparent 34%),
-    radial-gradient(ellipse at 100% 40%, rgba(20, 184, 166, .07), transparent 30%),
+    radial-gradient(circle at 12% 6%, rgba(13, 148, 136, 0.10), transparent 34%),
+    radial-gradient(circle at 88% 10%, rgba(37, 99, 235, 0.08), transparent 30%),
     #f4f7fb;
+  color: #0f172a;
 }
 
-.dashboard-shell {
-  width: 100%;
-  max-width: 1320px;
-  margin: 0 auto;
-}
+.dd-shell { max-width: 1200px; margin: 0 auto; }
 
-.dashboard-header {
+/* ---------- Hero ---------- */
+.dd-hero {
+  position: relative;
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 30px;
-}
-
-.heading-copy {
-  min-width: 0;
-}
-
-.eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--db-blue);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 1.5px;
-}
-
-.heading-copy h1 {
-  margin: 12px 0 8px;
-  font-size: clamp(30px, 3.3vw, 43px);
-  font-weight: 780;
-  letter-spacing: -1.8px;
-  line-height: 1.12;
-}
-
-.heading-copy h1 span {
-  color: var(--db-teal);
-}
-
-.heading-copy > p,
-.section-heading p {
-  margin: 0;
-  color: var(--db-muted);
-  font-size: 14px;
-  line-height: 1.7;
-}
-
-.header-actions {
-  display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  flex-shrink: 0;
+  padding: 28px 30px;
+  margin-bottom: 28px;
+  border-radius: 24px;
+  background: linear-gradient(120deg, #0f766e 0%, #0d9488 45%, #0e7490 100%);
+  color: #fff;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(13, 118, 110, 0.28);
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 38px;
+.dd-hero-glow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 85% 20%, rgba(255, 255, 255, 0.18), transparent 40%),
+    radial-gradient(circle at 60% 120%, rgba(255, 255, 255, 0.10), transparent 45%);
+  pointer-events: none;
 }
 
-.stat-card {
-  min-width: 0;
-  padding: 22px;
-  border: 1px solid rgba(255, 255, 255, .9);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, .8);
-  box-shadow: 0 12px 32px rgba(15, 23, 42, .045);
-  backdrop-filter: blur(18px);
-}
+.dd-hero-copy { position: relative; z-index: 1; min-width: 0; flex: 1 1 320px; }
 
-.stat-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 22px;
-}
-
-.stat-icon {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border-radius: 14px;
-  font-size: 19px;
-}
-
-.stat-icon.blue {
-  color: #2563eb;
-  background: #eff6ff;
-}
-
-.stat-icon.teal {
-  color: #0f766e;
-  background: #ccfbf1;
-}
-
-.stat-icon.amber {
-  color: #b45309;
-  background: #fef3c7;
-}
-
-.stat-label {
-  margin: 0 0 5px;
-  color: var(--db-muted);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.stat-card h2 {
-  margin: 0;
-  font-size: 32px;
-  font-weight: 780;
-  letter-spacing: -1px;
-}
-
-.stat-caption {
-  margin: 8px 0 0;
-  color: #94a3b8;
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.rating-number {
-  display: flex;
+.dd-eyebrow {
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-}
-
-.rating-star {
-  color: #f59e0b;
-  font-size: 20px;
-}
-
-.directory-section {
-  min-width: 0;
-}
-
-.section-heading {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 22px;
-}
-
-.section-heading h2 {
-  margin: 7px 0 5px;
-  font-size: 25px;
-  font-weight: 750;
-  letter-spacing: -.8px;
-}
-
-.toolbar {
-  margin-bottom: 20px;
-}
-
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  max-width: 540px;
-  min-height: 48px;
-  padding: 0 14px;
-  border: none;
-  outline: none;
-  border-radius: 15px;
-  background: rgba(255, 255, 255, .88);
-  box-shadow: 0 4px 16px rgba(15, 23, 42, .025);
-}
-
-.search-icon {
-  flex-shrink: 0;
-  color: #94a3b8;
-}
-
-.doctor-search {
-  min-width: 0;
-  flex: 1;
-}
-
-.clear-search {
-  display: grid;
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: #f1f5f9;
-  color: #64748b;
-  cursor: pointer;
-}
-
-.doctor-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-}
-
-.doctor-card {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  padding: 21px;
-  border: 1px solid rgba(255, 255, 255, .95);
-  border-radius: 23px;
-  background: rgba(255, 255, 255, .86);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, .045);
-  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
-}
-
-.doctor-card:hover {
-  transform: translateY(-4px);
-  border-color: #bfdbfe;
-  box-shadow: 0 20px 38px rgba(15, 23, 42, .08);
-}
-
-.doctor-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 19px;
-}
-
-.doctor-avatar {
-  display: grid;
-  width: 54px;
-  height: 54px;
-  flex-shrink: 0;
-  place-items: center;
-  border: 1px solid #dbeafe;
-  border-radius: 17px;
-  background: linear-gradient(135deg, #eff6ff, #ccfbf1);
-  color: var(--db-blue);
-  font-size: 23px;
-}
-
-.doctor-name {
-  overflow-wrap: anywhere;
-  margin: 0;
-  font-size: 17px;
-  font-weight: 750;
-  letter-spacing: -.35px;
-}
-
-.doctor-qualification {
-  min-height: 36px;
-  margin: 6px 0 18px;
-  color: var(--db-muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.doctor-details {
-  display: grid;
-  gap: 12px;
-  padding: 16px 0;
-  border-top: 1px solid #f1f5f9;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-.detail-row {
-  display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  color: var(--db-muted);
-  font-size: 11px;
-}
-
-.detail-row > span:first-child {
-  color: var(--db-teal);
-}
-
-.detail-row strong {
-  max-width: 130px;
-  overflow-wrap: anywhere;
-  color: #334155;
   font-size: 11px;
   font-weight: 700;
-  text-align: right;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: #99f6e4;
+  margin-bottom: 10px;
 }
 
-.doctor-card-footer {
-  display: flex;
+.dd-eyebrow .lucide-stethoscope { font-size: 14px; }
+
+.dd-eyebrow--dark { color: #0d9488; }
+
+.dd-hero h1 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  line-height: 1.15;
+}
+
+.dd-hero h1 .dot { color: #5eead4; }
+
+.dd-hero-sub { margin: 0; font-size: 14px; color: rgba(255, 255, 255, 0.85); }
+
+.dd-hero-badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+.dd-chip {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-top: auto;
-  padding-top: 17px;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
 }
 
-.fee-block {
+.dd-chip--muted { background: rgba(255, 255, 255, 0.10); color: rgba(255, 255, 255, 0.9); }
+
+.dd-chip--success {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: rgba(110, 231, 183, 0.4);
+  color: #d1fae5;
+}
+
+.dd-hero-side {
+  position: relative;
+  z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  min-width: 0;
+  align-items: flex-end;
+  gap: 16px;
 }
 
-.fee-block > span {
-  color: #94a3b8;
-  font-size: 10px;
+.dd-avatar {
+  width: 84px;
+  height: 84px;
+  border-radius: 22px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.18);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.fee-block strong {
-  overflow-wrap: anywhere;
-  font-size: 14px;
+.dd-avatar img { width: 100%; height: 100%; object-fit: cover; }
+
+.dd-avatar-fallback { font-size: 26px; font-weight: 800; color: #fff; letter-spacing: 1px; }
+
+.dd-hero-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+/* ---------- Error ---------- */
+.dd-error {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  border-radius: 16px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+}
+
+.dd-error .lucide-circle-alert { font-size: 22px; flex-shrink: 0; }
+.dd-error-copy { flex: 1; min-width: 0; }
+.dd-error-copy strong { display: block; font-size: 14px; }
+.dd-error-copy p { margin: 2px 0 0; font-size: 13px; }
+
+/* ---------- Stats ---------- */
+.dd-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.dd-stat {
+  position: relative;
+  padding: 20px;
+  border-radius: 20px;
+  background: #fff;
+  border: 1px solid #eef2f7;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+}
+
+.dd-stat::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--accent, #0d9488);
+}
+
+.dd-stat--blue { --accent: #2563eb; }
+.dd-stat--teal { --accent: #0d9488; }
+.dd-stat--amber { --accent: #f59e0b; }
+.dd-stat--green { --accent: #10b981; }
+.dd-stat--purple { --accent: #8b5cf6; }
+
+.dd-stat-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--accent) 12%, white);
+  color: var(--accent);
+}
+
+.dd-stat-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.dd-stat-value {
+  margin: 4px 0 2px;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  color: #0f172a;
+  line-height: 1.1;
+}
+
+.dd-stat-caption { font-size: 12px; color: #94a3b8; }
+
+
+/* ---------- Grid ---------- */
+.dd-grid {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.dd-col { display: flex; flex-direction: column; gap: 20px; }
+
+.dd-panel {
+  background: #fff;
+  border: 1px solid #eef2f7;
+  border-radius: 20px;
+  padding: 22px;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+
+.dd-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.dd-panel-title { margin: 2px 0 0; font-size: 18px; font-weight: 800; letter-spacing: -0.3px; }
+
+.dd-text-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0d9488;
+}
+.dd-text-link:hover { text-decoration: underline; }
+
+/* ---------- Appointment list ---------- */
+.dd-list { display: flex; flex-direction: column; gap: 10px; }
+
+.dd-appt {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid #eef2f7;
+  background: #f8fafc;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.dd-appt:hover { border-color: #cbd5e1; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06); }
+.dd-appt--past { opacity: 0.72; }
+
+.dd-appt-time {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 74px;
+  padding-right: 14px;
+  border-right: 1px solid #e2e8f0;
+}
+
+.dd-appt-hour { font-size: 15px; font-weight: 800; color: #0f172a; }
+.dd-appt-fee { font-size: 11px; color: #0d9488; font-weight: 700; margin-top: 2px; }
+
+.dd-appt-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d9488;
+  color: #fff;
+  font-size: 13px;
   font-weight: 800;
 }
 
-.feedback-card {
+.dd-appt-body { flex: 1; min-width: 0; }
+.dd-appt-body h3 { margin: 0; font-size: 14px; font-weight: 700; }
+.dd-appt-meta { margin: 2px 0 0; font-size: 12px; color: #64748b; }
+
+.dd-appt-reason {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #475569;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 25px;
-  border: 1px solid var(--db-border);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, .88);
+  gap: 5px;
 }
 
-.feedback-card h3 {
-  margin: 0 0 5px;
-  font-size: 15px;
+.dd-appt-side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+
+
+/* ---------- Mini rows ---------- */
+.dd-mini {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 13px;
+  border: 1px solid #eef2f7;
+  background: #f8fafc;
 }
 
-.feedback-card p {
-  margin: 0;
-  color: var(--db-muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-
-.feedback-icon {
-  flex-shrink: 0;
-  color: var(--db-blue);
-  font-size: 24px;
-}
-
-.empty-card {
+.dd-mini-date {
+  display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 48px 20px;
-  text-align: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 11px;
+  background: #eff6ff;
+  color: #1d4ed8;
+  flex-shrink: 0;
 }
 
-.error-card {
-  border-color: #fecaca;
-  background: #fffafa;
-}
+.dd-mini-day { font-size: 16px; font-weight: 800; line-height: 1; }
+.dd-mini-mon { font-size: 10px; font-weight: 700; text-transform: uppercase; }
 
-.error-card .feedback-icon {
-  color: #dc2626;
-}
-
-.skeleton-card {
-  gap: 14px;
-}
-
-.skeleton {
-  border-radius: 9px;
-  background: linear-gradient(90deg, #f1f5f9, #e2e8f0, #f1f5f9);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s linear infinite;
-}
-
-.skeleton-avatar {
-  width: 54px;
-  height: 54px;
-  border-radius: 17px;
-}
-
-.skeleton-line {
-  width: 60%;
-  height: 12px;
-}
-
-.skeleton-line.wide {
-  width: 85%;
-  height: 17px;
-}
-
-.skeleton-block {
-  width: 100%;
-  height: 70px;
-  margin-top: 8px;
-}
-
-@keyframes shimmer {
-  to { background-position: -200% 0; }
-}
-
-.dashboard-banner {
+.dd-mini-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 20px;
-  margin-top: 42px;
-  padding: 26px;
-  border: 1px solid rgba(255, 255, 255, .15);
-  border-radius: 24px;
-  background: linear-gradient(125deg, #0f172a, #172554 68%, #134e4a);
-  color: white;
-  box-shadow: 0 18px 40px rgba(15, 23, 42, .12);
+  justify-content: center;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.banner-icon {
-  display: grid;
+.dd-mini-body { flex: 1; min-width: 0; }
+.dd-mini-body h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dd-mini-body p { margin: 1px 0 0; font-size: 11px; color: #64748b; }
+
+.dd-mini-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  text-transform: capitalize;
+}
+.dd-mini-status.status-pending { background: #fffbeb; color: #b45309; }
+.dd-mini-status.status-confirmed { background: #ecfdf5; color: #047857; }
+.dd-mini-status.status-completed { background: #eff6ff; color: #1d4ed8; }
+.dd-mini-status.status-cancelled { background: #fef2f2; color: #b91c1c; }
+
+/* ---------- Buttons ---------- */
+.dd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s, transform 0.1s;
+}
+.dd-btn:active { transform: scale(0.97); }
+.dd-btn--primary { background: #0d9488; color: #fff; }
+.dd-btn--primary:hover { background: #0f766e; }
+.dd-btn--sm { padding: 6px 12px; font-size: 11px; }
+
+/* ---------- Empty ---------- */
+.dd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px 20px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 16px;
+  color: #475569;
+}
+.dd-empty--sm { padding: 26px 16px; }
+
+.dd-empty-icon {
   width: 52px;
   height: 52px;
-  flex-shrink: 0;
-  place-items: center;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, .1);
-  color: #5eead4;
-  font-size: 23px;
-}
-
-.banner-copy {
-  flex: 1;
-  min-width: 0;
-}
-
-.banner-copy h2 {
-  margin: 0 0 6px;
-  font-size: 18px;
-  font-weight: 750;
-}
-
-.banner-copy p {
-  max-width: 580px;
-  margin: 0;
-  color: #cbd5e1;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.dashboard-footer {
+  border-radius: 15px;
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  background: #f0fdfa;
+  color: #0d9488;
+  margin-bottom: 14px;
+}
+.dd-empty h3 { margin: 0 0 4px; font-size: 15px; color: #0f172a; }
+.dd-empty p { margin: 0; font-size: 13px; }
+
+/* ---------- Skeletons ---------- */
+.dd-skeleton {
+  height: 68px;
+  border-radius: 14px;
+  background: #eef2f7;
+  animation: dd-pulse 1.5s infinite;
+}
+.dd-skeleton--sm { height: 52px; }
+
+@keyframes dd-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+
+/* ---------- Quick actions ---------- */
+.dd-quick {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
   margin-top: 24px;
-  padding: 18px 2px 0;
-  border-top: 1px solid var(--db-border);
-  color: #94a3b8;
-  font-size: 11px;
 }
 
-@media (max-width: 1100px) {
-  .doctor-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .dashboard-header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
+.dd-quick-btn {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 1px solid #eef2f7;
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+  transition: transform 0.12s, box-shadow 0.15s, border-color 0.15s;
+  text-align: left;
 }
 
-@media (max-width: 760px) {
-  .dashboard-page {
-    padding: 25px 18px;
-  }
-
-  .stats-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .stat-card {
-    padding: 17px;
-  }
-
-  .stat-card:last-child {
-    grid-column: 1 / -1;
-  }
-
-  .doctor-grid {
-    gap: 13px;
-  }
-
-  .dashboard-banner {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    padding: 22px;
-  }
-
-  .banner-copy {
-    flex-basis: calc(100% - 75px);
-  }
-
-  .dashboard-banner > :last-child {
-    width: 100%;
-  }
+.dd-quick-btn:hover {
+  transform: translateY(-2px);
+  border-color: #cbd5e1;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
-@media (max-width: 520px) {
-  .dashboard-page {
-    padding: 20px 13px;
-  }
+.dd-quick-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+}
+.dd-quick-icon--blue { background: #eff6ff; color: #2563eb; }
+.dd-quick-icon--teal { background: #f0fdfa; color: #0d9488; }
+.dd-quick-icon--amber { background: #fffbeb; color: #d97706; }
+.dd-quick-icon--purple { background: #f5f3ff; color: #7c3aed; }
 
-  .heading-copy h1 {
-    font-size: 32px;
-    letter-spacing: -1.2px;
-  }
-
-  .heading-copy > p {
-    font-size: 12px;
-  }
-
-  .header-actions {
-    width: 100%;
-  }
-
-  .stats-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .stat-card:last-child {
-    grid-column: auto;
-  }
-
-  .stat-top {
-    margin-bottom: 14px;
-  }
-
-  .section-heading {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .doctor-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .doctor-card {
-    padding: 19px;
-  }
-
-  .doctor-qualification {
-    min-height: 0;
-  }
-
-  .search-box {
-    gap: 7px;
-    padding: 0 10px;
-  }
-
-  .feedback-card:not(.empty-card) {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .dashboard-footer {
-    flex-direction: column;
-    gap: 7px;
-  }
+/* ---------- Responsive ---------- */
+@media (max-width: 1024px) {
+  .dd-stats { grid-template-columns: repeat(3, 1fr); }
+  .dd-grid { grid-template-columns: 1fr; }
+  .dd-quick { grid-template-columns: repeat(2, 1fr); }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .doctor-card,
-  .skeleton {
-    animation: none;
-    transition: none;
-  }
+@media (max-width: 640px) {
+  .dd-page { padding: 20px 14px 48px; }
+  .dd-hero { padding: 22px 20px; }
+  .dd-hero h1 { font-size: 24px; }
+  .dd-hero-side { align-items: flex-start; width: 100%; }
+  .dd-hero-actions { justify-content: flex-start; }
+  .dd-stats { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .dd-stat { padding: 16px; }
+  .dd-stat-value { font-size: 24px; }
+  .dd-panel { padding: 16px; }
+  .dd-appt { flex-wrap: wrap; }
+  .dd-appt-side { flex-direction: row; align-items: center; width: 100%; justify-content: space-between; }
+  .dd-quick { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 400px) {
+  .dd-stats { grid-template-columns: 1fr; }
 }
 </style>
+

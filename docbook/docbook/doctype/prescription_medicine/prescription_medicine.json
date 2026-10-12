@@ -1,0 +1,172 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "RXMED-.#####",
+ "creation": "2026-10-10 12:08:58.869470",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "prescription",
+  "patient",
+  "doctor",
+  "medicine",
+  "prescribed_medicine_name",
+  "status",
+  "dosage",
+  "route",
+  "frequency",
+  "start_date",
+  "end_date",
+  "dose_time_1",
+  "dose_time_2",
+  "dose_time_3",
+  "dose_time_4",
+  "instructions"
+ ],
+ "fields": [
+  {
+   "fieldname": "prescription",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Prescription",
+   "options": "Prescription",
+   "reqd": 1
+  },
+  {
+   "fieldname": "patient",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Patient",
+   "options": "Patient Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "doctor",
+   "fieldtype": "Link",
+   "label": "Doctor",
+   "options": "Doctor Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "medicine",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Medicine",
+   "options": "Medicine",
+   "reqd": 1
+  },
+  {
+   "fieldname": "prescribed_medicine_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Prescribed Medicine Name",
+   "read_only": 1
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Active\nCompleted\nCancelled"
+  },
+  {
+   "fieldname": "dosage",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Dosage"
+  },
+  {
+   "default": "Oral",
+   "fieldname": "route",
+   "fieldtype": "Select",
+   "label": "Route",
+   "options": "Oral\nTopical\nInhalation\nInjection\nOther"
+  },
+  {
+   "default": "Once Daily",
+   "fieldname": "frequency",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Frequency",
+   "options": "Once Daily\nTwice Daily\nThree Times Daily\nFour Times Daily\nAs Needed\nOther"
+  },
+  {
+   "fieldname": "start_date",
+   "fieldtype": "Date",
+   "label": "Start Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "end_date",
+   "fieldtype": "Date",
+   "label": "End Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dose_time_1",
+   "fieldtype": "Time",
+   "label": "Dose Time 1"
+  },
+  {
+   "fieldname": "dose_time_2",
+   "fieldtype": "Time",
+   "label": "Dose Time 2"
+  },
+  {
+   "fieldname": "dose_time_3",
+   "fieldtype": "Time",
+   "label": "Dose Time 3"
+  },
+  {
+   "fieldname": "dose_time_4",
+   "fieldtype": "Time",
+   "label": "Dose Time 4"
+  },
+  {
+   "fieldname": "instructions",
+   "fieldtype": "Small Text",
+   "label": "Instructions"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-10 13:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Prescription Medicine",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "write": 1,
+   "role": "Doctor"
+  },
+  {
+   "read": 1,
+   "role": "Patient"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "prescribed_medicine_name,patient,prescription",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

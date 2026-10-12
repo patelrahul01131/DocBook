@@ -192,7 +192,8 @@ async function logout() {
   } finally {
     setUser(null)
     isLoading.value = false
-    router.push('/login')
+    // Navigation is handled by the caller (e.g. App.vue) to keep the
+    // store free of router coupling and avoid circular imports.
   }
 }
 

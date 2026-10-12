@@ -1,0 +1,174 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "PMH-.#####",
+ "creation": "2026-10-10 11:53:01.177892",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "patient",
+  "record_date",
+  "recorded_by",
+  "appointment",
+  "status",
+  "record_type",
+  "medical_condition",
+  "condition",
+  "severity",
+  "diagnosis_date",
+  "description",
+  "symptoms",
+  "allergies",
+  "current_medications",
+  "past_treatments",
+  "treatment_notes",
+  "notes",
+  "attachments"
+ ],
+ "fields": [
+  {
+   "fieldname": "patient",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Patient",
+   "options": "Patient Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "record_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Record Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "recorded_by",
+   "fieldtype": "Link",
+   "label": "Recorded By",
+   "options": "User"
+  },
+  {
+   "fieldname": "appointment",
+   "fieldtype": "Link",
+   "label": "Appointment",
+   "options": "Appointment"
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Active\nResolved\nInactive"
+  },
+  {
+   "default": "Medical Condition",
+   "fieldname": "record_type",
+   "fieldtype": "Select",
+   "label": "Record Type",
+   "options": "Medical Condition\nAllergy\nPast Surgery\nFamily History\nOther"
+  },
+  {
+   "fieldname": "medical_condition",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Medical Condition"
+  },
+  {
+   "fieldname": "condition",
+   "fieldtype": "Data",
+   "label": "Condition / Problem"
+  },
+  {
+   "fieldname": "severity",
+   "fieldtype": "Select",
+   "label": "Severity",
+   "options": "Mild\nModerate\nSevere\nUnknown"
+  },
+  {
+   "fieldname": "diagnosis_date",
+   "fieldtype": "Date",
+   "label": "Diagnosis Date"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "symptoms",
+   "fieldtype": "Small Text",
+   "label": "Symptoms"
+  },
+  {
+   "fieldname": "allergies",
+   "fieldtype": "Small Text",
+   "label": "Allergies"
+  },
+  {
+   "fieldname": "current_medications",
+   "fieldtype": "Small Text",
+   "label": "Current Medications"
+  },
+  {
+   "fieldname": "past_treatments",
+   "fieldtype": "Small Text",
+   "label": "Past Treatments"
+  },
+  {
+   "fieldname": "treatment_notes",
+   "fieldtype": "Small Text",
+   "label": "Treatment Notes"
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Text Editor",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "attachments",
+   "fieldtype": "Attach",
+   "label": "Attachments"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-10 13:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Patient Medical History",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "write": 1,
+   "role": "Doctor"
+  },
+  {
+   "read": 1,
+   "role": "Patient"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "medical_condition,patient,status",
+ "sort_field": "record_date",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

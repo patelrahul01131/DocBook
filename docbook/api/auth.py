@@ -3,11 +3,6 @@ import frappe
 from frappe import _
 
 
-
-import frappe
-from frappe import _
-
-
 @frappe.whitelist(allow_guest=True)
 def signup(full_name, email, password, phone=None):
     """Public signup for patients only."""
@@ -152,8 +147,11 @@ def get_current_user():
 def logout_user():
     frappe.local.login_manager.logout()
     return {"success": True}
-    """Identify the logged-in DocBook user."""
 
+
+@frappe.whitelist()
+def get_login_redirect():
+    """Identify the logged-in DocBook user and their portal redirect."""
     email = frappe.session.user
 
     if email == "Guest":

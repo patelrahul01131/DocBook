@@ -85,7 +85,12 @@ function viewDoctor() {
 // ----------------------------------
 
 function findDoctors() {
-	router.push('/find-doctors')
+	const el = document.querySelector('.search-card')
+	if (el) {
+		el.scrollIntoView({ behavior: 'smooth' })
+	} else {
+		router.push('/home')
+	}
 }
 
 

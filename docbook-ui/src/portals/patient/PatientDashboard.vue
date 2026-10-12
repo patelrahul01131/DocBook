@@ -10,6 +10,8 @@ const router = useRouter()
 const auth = useAuthStore()
 
 const appointments = ref([])
+const chartPeriod = ref(14)
+const hoveredBar = ref(null)
 const doctors = ref([])
 const searchQuery = ref('')
 const loading = ref(true)
@@ -229,6 +231,58 @@ const completedAppointments = computed(() =>
   appointments.value.filter(isCompleted).length
 )
 
+// --------------------------------------------------
+// Chart / Analytics
+// --------------------------------------------------
+const activityChartData = computed(() => {
+  const days = chartPeriod.value
+  const list = []
+  const today = new Date()
+
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date()
+    d.setDate(today.getDate() - i)
+    const yyyy = d.getFullYear()
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const dateStr = `${yyyy}-${mm}-${dd}`
+    const dayLabel = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+    const weekday = d.toLocaleDateString('en-IN', { weekday: 'narrow' })
+
+    const dayAppts = appointments.value.filter(a => a.appointment_date === dateStr)
+    const completed = dayAppts.filter(a => isCompleted(a)).length
+    const upcoming = dayAppts.filter(a => isUpcoming(a)).length
+    const cancelled = dayAppts.filter(a => isCancelled(a)).length
+    const pending = dayAppts.filter(a => ['pending', 'booked'].includes(statusOf(a))).length
+
+    list.push({
+      date: dateStr,
+      dayLabel,
+      weekday,
+      total: dayAppts.length,
+      completed,
+      upcoming,
+      cancelled,
+      pending,
+    })
+  }
+
+  const maxTotal = Math.max(...list.map(i => i.total), 3)
+  return list.map(item => ({
+    ...item,
+    heightPct: Math.max(Math.round((item.total / maxTotal) * 100), 4),
+  }))
+})
+
+const totalPeriodAppts = computed(() =>
+  activityChartData.value.reduce((acc, curr) => acc + curr.total, 0)
+)
+
+const avgDailyAppts = computed(() => {
+  if (!chartPeriod.value) return 0
+  return (totalPeriodAppts.value / chartPeriod.value).toFixed(1)
+})
+
 const filteredDoctors = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
 
@@ -260,11 +314,15 @@ function viewDoctor(doctor) {
 }
 
 function findDoctors() {
-  router.push('/find-doctors')
+  router.push('/home')
 }
 
 function viewAppointments(slot_name) {
-  router.push(`/show-appointment/${slot_name}`)
+  if (slot_name && typeof slot_name === 'string') {
+    router.push(`/show-appointment/${slot_name}`)
+  } else {
+    router.push('/my-appointments')
+  }
 }
 
 onMounted(() => {
@@ -387,6 +445,89 @@ onMounted(() => {
           </article>
         </section>
 
+        <!-- Activity Chart Section -->
+        <section class="section-block chart-section">
+          <div class="section-heading">
+            <div>
+              <div class="eyebrow">APPOINTMENT ACTIVITY</div>
+              <h2>Your Health Timeline</h2>
+              <p>Visual overview of your appointment history.</p>
+            </div>
+            <div class="chart-period-btns">
+              <button
+                v-for="p in [7, 14, 30]"
+                :key="p"
+                class="period-btn"
+                :class="{ active: chartPeriod === p }"
+                @click="chartPeriod = p"
+              >
+                {{ p }}d
+              </button>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <!-- Summary row -->
+            <div class="chart-summary">
+              <div class="chart-stat">
+                <span class="chart-stat-val">{{ totalPeriodAppts }}</span>
+                <span class="chart-stat-label">Total ({{ chartPeriod }}d)</span>
+              </div>
+              <div class="chart-stat">
+                <span class="chart-stat-val">{{ avgDailyAppts }}</span>
+                <span class="chart-stat-label">Avg / day</span>
+              </div>
+              <div class="chart-stat">
+                <span class="chart-stat-val">{{ completedAppointments }}</span>
+                <span class="chart-stat-label">Completed</span>
+              </div>
+              <div class="chart-stat">
+                <span class="chart-stat-val">{{ upcomingAppointments.length }}</span>
+                <span class="chart-stat-label">Upcoming</span>
+              </div>
+            </div>
+
+            <!-- Bar chart -->
+            <div class="bar-chart-wrap">
+              <div
+                v-for="bar in activityChartData"
+                :key="bar.date"
+                class="bar-col"
+                @mouseenter="hoveredBar = bar"
+                @mouseleave="hoveredBar = null"
+              >
+                <!-- Tooltip -->
+                <div v-if="hoveredBar === bar" class="bar-tooltip">
+                  <div class="tooltip-date">{{ bar.dayLabel }}</div>
+                  <div class="tooltip-row"><span class="t-dot completed"></span> Completed: {{ bar.completed }}</div>
+                  <div class="tooltip-row"><span class="t-dot upcoming"></span> Upcoming: {{ bar.upcoming }}</div>
+                  <div v-if="bar.pending" class="tooltip-row"><span class="t-dot pending"></span> Pending: {{ bar.pending }}</div>
+                  <div v-if="bar.cancelled" class="tooltip-row"><span class="t-dot cancelled"></span> Cancelled: {{ bar.cancelled }}</div>
+                </div>
+
+                <div class="bar-track">
+                  <div
+                    class="bar-fill"
+                    :style="{ height: bar.heightPct + '%' }"
+                    :class="{
+                      'bar-active': bar.total > 0,
+                      'bar-today': bar.date === new Date().toISOString().slice(0,10)
+                    }"
+                  ></div>
+                </div>
+                <div class="bar-label">{{ bar.weekday }}</div>
+              </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-dot completed"></span> Completed</span>
+              <span class="legend-item"><span class="legend-dot upcoming"></span> Upcoming</span>
+              <span class="legend-item"><span class="legend-dot pending"></span> Pending</span>
+            </div>
+          </div>
+        </section>
+
         <!-- Upcoming appointments -->
         <section class="section-block">
           <div class="section-heading">
@@ -459,7 +600,7 @@ onMounted(() => {
                     statusOf(appointment) === 'confirmed'
                       ? 'green'
                       : statusOf(appointment) === 'pending'
-                        ? 'orange'
+                        ? 'amber'
                         : 'blue'
                   "
                 >
@@ -588,6 +729,39 @@ onMounted(() => {
                 @click="viewDoctor(doctor)"
               />
             </article>
+          </div>
+        </section>
+
+        <!-- Quick Access: Health Records -->
+        <section class="section-block">
+          <div class="section-heading">
+            <div>
+              <div class="eyebrow">YOUR HEALTH RECORDS</div>
+              <h2>Health & Prescriptions</h2>
+              <p>Access your medical information and medicine schedule.</p>
+            </div>
+          </div>
+          <div class="quick-links-grid">
+            <button class="quick-link-card" @click="router.push('/medical-history')">
+              <div class="ql-icon" style="background:#f0fdfa; color:#0d9488;">📋</div>
+              <div class="ql-title">Medical History</div>
+              <div class="ql-desc">Conditions, allergies & past treatments</div>
+            </button>
+            <button class="quick-link-card" @click="router.push('/prescriptions')">
+              <div class="ql-icon" style="background:#eff6ff; color:#2563eb;">💊</div>
+              <div class="ql-title">Prescriptions</div>
+              <div class="ql-desc">All prescriptions from your doctors</div>
+            </button>
+            <button class="quick-link-card" @click="router.push('/medicine-reminders')">
+              <div class="ql-icon" style="background:#fef3c7; color:#b45309;">🔔</div>
+              <div class="ql-title">Medicine Reminders</div>
+              <div class="ql-desc">Scheduled medicine dose reminders</div>
+            </button>
+            <button class="quick-link-card" @click="router.push('/medicines')">
+              <div class="ql-icon" style="background:#ede9fe; color:#7c3aed;">📖</div>
+              <div class="ql-title">Medicine Catalog</div>
+              <div class="ql-desc">Browse medicines and health info</div>
+            </button>
           </div>
         </section>
 
@@ -1216,6 +1390,248 @@ onMounted(() => {
   .appointment-card,
   .doctor-card {
     transition: none;
+  }
+}
+
+/* Quick links grid */
+.quick-links-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.quick-link-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 20px;
+  background: rgba(255,255,255,.86);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 18px;
+  box-shadow: 0 4px 12px rgba(15,23,42,.05);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+  backdrop-filter: blur(12px);
+}
+
+.quick-link-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(15,23,42,.10);
+  border-color: rgba(99, 202, 185, 0.6);
+}
+
+.ql-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.ql-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ql-desc {
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+/* ===== Activity Chart Styles ===== */
+.chart-period-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.period-btn {
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 1.5px solid #e2e8f0;
+  background: white;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.period-btn.active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
+.period-btn:hover:not(.active) {
+  border-color: #2563eb;
+  color: #2563eb;
+}
+
+.chart-card {
+  background: rgba(255,255,255,0.88);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  border-radius: 22px;
+  padding: 24px;
+  box-shadow: 0 8px 24px rgba(15,23,42,0.06);
+  backdrop-filter: blur(16px);
+}
+
+.chart-summary {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.chart-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chart-stat-val {
+  font-size: 28px;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -1px;
+}
+
+.chart-stat-label {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.bar-chart-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 140px;
+  margin-bottom: 12px;
+}
+
+.bar-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.bar-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0f172a;
+  color: white;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 10;
+  box-shadow: 0 8px 20px rgba(15,23,42,0.3);
+  pointer-events: none;
+}
+
+.tooltip-date {
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 6px;
+  color: #94a3b8;
+}
+
+.tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.t-dot, .legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.t-dot.completed, .legend-dot.completed { background: #10b981; }
+.t-dot.upcoming, .legend-dot.upcoming { background: #2563eb; }
+.t-dot.pending, .legend-dot.pending { background: #f59e0b; }
+.t-dot.cancelled { background: #ef4444; }
+
+.bar-track {
+  width: 100%;
+  height: 110px;
+  display: flex;
+  align-items: flex-end;
+  background: #f8fafc;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  width: 100%;
+  background: linear-gradient(180deg, #dbeafe, #bfdbfe);
+  border-radius: 6px 6px 0 0;
+  transition: height 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  min-height: 4px;
+}
+
+.bar-fill.bar-active {
+  background: linear-gradient(180deg, #3b82f6, #2563eb);
+}
+
+.bar-fill.bar-today.bar-active {
+  background: linear-gradient(180deg, #10b981, #059669);
+}
+
+.bar-label {
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 600;
+  text-align: center;
+}
+
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .chart-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .bar-chart-wrap {
+    gap: 2px;
   }
 }
 </style>

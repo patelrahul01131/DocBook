@@ -1,0 +1,130 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "REM-.#####",
+ "creation": "2026-10-10 13:30:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "patient",
+  "prescription",
+  "prescription_medicine",
+  "scheduled_at",
+  "reminder_status",
+  "active",
+  "email_address",
+  "sent_at",
+  "retry_count",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "fieldname": "patient",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Patient",
+   "options": "Patient Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "prescription",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Prescription",
+   "options": "Prescription",
+   "reqd": 1
+  },
+  {
+   "fieldname": "prescription_medicine",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Prescription Medicine",
+   "options": "Prescription Medicine",
+   "reqd": 1
+  },
+  {
+   "fieldname": "scheduled_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Scheduled At",
+   "reqd": 1
+  },
+  {
+   "default": "Pending",
+   "fieldname": "reminder_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Reminder Status",
+   "options": "Pending\nSent\nFailed\nCancelled"
+  },
+  {
+   "default": "1",
+   "fieldname": "active",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Active"
+  },
+  {
+   "fieldname": "email_address",
+   "fieldtype": "Data",
+   "label": "Email Address"
+  },
+  {
+   "fieldname": "sent_at",
+   "fieldtype": "Datetime",
+   "label": "Sent At",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "retry_count",
+   "fieldtype": "Int",
+   "label": "Retry Count",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-10 13:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Medicine Reminder",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Doctor"
+  },
+  {
+   "read": 1,
+   "role": "Patient"
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "patient,prescription,scheduled_at,reminder_status",
+ "sort_field": "scheduled_at",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}

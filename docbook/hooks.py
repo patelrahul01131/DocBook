@@ -154,23 +154,14 @@ app_license = "mit"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"docbook.tasks.all"
-# 	],
-# 	"daily": [
-# 		"docbook.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"docbook.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"docbook.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"docbook.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"cron": {
+		# Run every 15 minutes to process due medicine reminders
+		"*/15 * * * *": [
+			"docbook.api.reminder.process_due_reminders"
+		],
+	},
+}
 
 # Testing
 # -------

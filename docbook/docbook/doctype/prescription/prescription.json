@@ -1,35 +1,76 @@
 {
  "actions": [],
  "allow_rename": 1,
+ "autoname": "RX-.#####",
  "creation": "2026-10-06 12:11:27.273440",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "appointment",
-  "doctor",
   "patient",
+  "doctor",
+  "appointment",
+  "prescription_date",
+  "status",
+  "diagnosis",
+  "instructions",
+  "follow_up_date",
   "notes",
   "medicines",
   "created_at"
  ],
  "fields": [
   {
-   "fieldname": "appointment",
+   "fieldname": "patient",
    "fieldtype": "Link",
-   "label": "Appointment",
-   "options": "Appointment"
+   "in_list_view": 1,
+   "label": "Patient",
+   "options": "Patient Profile",
+   "reqd": 1
   },
   {
    "fieldname": "doctor",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Doctor",
-   "options": "Doctor Profile"
+   "options": "Doctor Profile",
+   "reqd": 1
   },
   {
-   "fieldname": "patient",
+   "fieldname": "appointment",
    "fieldtype": "Link",
-   "label": "Patient",
-   "options": "Patient Profile"
+   "in_list_view": 1,
+   "label": "Appointment",
+   "options": "Appointment"
+  },
+  {
+   "fieldname": "prescription_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "label": "Prescription Date",
+   "reqd": 1
+  },
+  {
+   "default": "Active",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Status",
+   "options": "Draft\nActive\nCompleted\nCancelled"
+  },
+  {
+   "fieldname": "diagnosis",
+   "fieldtype": "Small Text",
+   "label": "Diagnosis / Reason"
+  },
+  {
+   "fieldname": "instructions",
+   "fieldtype": "Text Editor",
+   "label": "General Instructions"
+  },
+  {
+   "fieldname": "follow_up_date",
+   "fieldtype": "Date",
+   "label": "Follow-Up Date"
   },
   {
    "fieldname": "notes",
@@ -39,7 +80,7 @@
   {
    "fieldname": "medicines",
    "fieldtype": "Small Text",
-   "label": "Medicines"
+   "label": "Medicines Summary"
   },
   {
    "fieldname": "created_at",
@@ -50,10 +91,11 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-06 12:13:36.812246",
+ "modified": "2026-10-10 13:30:00.000000",
  "modified_by": "Administrator",
  "module": "DocBook",
  "name": "Prescription",
+ "naming_rule": "Expression",
  "owner": "Administrator",
  "permissions": [
   {
@@ -67,11 +109,23 @@
    "role": "System Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "write": 1,
+   "role": "Doctor"
+  },
+  {
+   "read": 1,
+   "role": "Patient"
   }
  ],
  "row_format": "Dynamic",
  "rows_threshold_for_grid_search": 20,
- "sort_field": "modified",
+ "search_fields": "patient,doctor,prescription_date,status",
+ "sort_field": "prescription_date",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "track_changes": 1
 }

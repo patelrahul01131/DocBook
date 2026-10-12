@@ -32,28 +32,59 @@
       </div>
     </div>
 
-    <div class="form-grid">
+    <div class="form-group mb-4">
+      <label>Appointment Date *</label>
 
-      <div class="form-group">
-        <label>Appointment Date</label>
+      <input
+        v-model="bookingForm.appointment_date"
+        type="date"
+        :min="today"
+        class="date-input"
+        @change="fetchDoctorSlots"
+      />
+    </div>
 
-        <input
-          v-model="bookingForm.appointment_date"
-          type="date"
-          :min="today"
-          class="date-input"
-        />
+    <!-- Available Slots Section -->
+    <div class="slots-container">
+      <div class="slots-header-row">
+        <label class="slots-label">Select Available Time Slot *</label>
+        <span v-if="bookingForm.appointment_time" class="selected-time-badge">
+          ✓ Selected: {{ formatSlotTime(bookingForm.appointment_time) }}
+        </span>
       </div>
 
-      <div class="form-group">
-        <label>Appointment Time</label>
-
-        <input
-          v-model="bookingForm.appointment_time"
-          type="time"
-        />
+      <div v-if="!bookingForm.appointment_date" class="slots-hint">
+        📅 Please pick a date above to view available consultation slots.
       </div>
 
+      <div v-else-if="loadingSlots" class="slots-loading">
+        ⏳ Loading available slots...
+      </div>
+
+      <div v-else-if="slotsError" class="slots-error">
+        ⚠️ {{ slotsError }}
+      </div>
+
+      <div v-else-if="!availableSlots.length" class="empty-slots-box">
+        ⚠️ No slots available on this date. Dr. {{ doctor?.full_name || 'the doctor' }} may be off duty, on leave, or fully booked. Please choose another date.
+      </div>
+
+      <div v-else class="slots-grid">
+        <button
+          v-for="s in availableSlots"
+          :key="s.start_time"
+          type="button"
+          class="slot-btn"
+          :class="{ active: bookingForm.appointment_time === s.start_time }"
+          @click="selectSlot(s)"
+        >
+          {{ s.formatted }}
+        </button>
+      </div>
+
+      <div class="hours-hint">
+        ⏰ Hospital hours: 09:00 AM – 08:00 PM (Monday – Saturday)
+      </div>
     </div>
 
     <div class="fee-preview">
@@ -141,7 +172,7 @@
         <span>Time</span>
 
         <strong>
-          {{ bookingForm.appointment_time }}
+          {{ formatSlotTime(bookingForm.appointment_time) || bookingForm.appointment_time }}
         </strong>
       </div>
 
@@ -294,7 +325,7 @@
 
         <button
           class="primary-button"
-          @click="$router.push('/find-doctors')"
+          @click="$router.push('/home')"
         >
           Find a Doctor
         </button>
@@ -408,6 +439,63 @@
                 </div>
               </div>
 
+            </div>
+
+          </div>
+
+
+          <!-- Patient Reviews -->
+          <div class="section" v-if="doctorReviewStats.total > 0 || reviewsLoading">
+
+            <div class="section-heading">
+              <div>
+                <span class="section-eyebrow">
+                  REVIEWS
+                </span>
+
+                <h3>
+                  Patient Reviews
+                  <small class="reviews-count" v-if="doctorReviewStats.total">
+                    ({{ doctorReviewStats.total }})
+                  </small>
+                </h3>
+              </div>
+
+              <div class="reviews-summary" v-if="doctorReviewStats.total">
+                ★ {{ doctorReviewStats.average }}
+              </div>
+            </div>
+
+            <div v-if="reviewsLoading" class="reviews-loading">
+              Loading reviews…
+            </div>
+
+            <div v-else class="reviews-list">
+              <article
+                v-for="r in doctorReviews"
+                :key="r.name"
+                class="review-item"
+              >
+                <div class="review-item-head">
+                  <div class="review-stars">
+                    <span
+                      v-for="n in 5"
+                      :key="n"
+                      class="mini-star"
+                      :class="{ on: n <= r.rating }"
+                    >★</span>
+                  </div>
+                  <time v-if="r.review_date" class="review-date">
+                    {{ new Date(r.review_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) }}
+                  </time>
+                </div>
+
+                <p v-if="r.feedback" class="review-feedback">
+                  “{{ r.feedback }}”
+                </p>
+
+                <p class="review-author">— {{ r.patient_name || 'A patient' }}</p>
+              </article>
             </div>
 
           </div>
@@ -651,6 +739,9 @@ const router = useRouter()
 const auth = useAuthStore()
 
 const doctor = ref(null)
+const doctorReviews = ref([])
+const doctorReviewStats = ref({ average: 0, total: 0 })
+const reviewsLoading = ref(false)
 
 const showBookingDialog = ref(false)
 
@@ -755,25 +846,84 @@ const fetchDoctor = async () => {
 }
 
 
+const fetchReviews = async () => {
+  if (!route.query.doctor) return
+  reviewsLoading.value = true
+  try {
+    const res = await call('docbook.api.review.get_doctor_reviews', {
+      doctor: route.query.doctor,
+      limit: 20,
+    })
+    doctorReviews.value = Array.isArray(res?.reviews) ? res.reviews : []
+    doctorReviewStats.value = {
+      average: res?.average || 0,
+      total: res?.total || 0,
+    }
+  } catch (error) {
+    console.error('Failed to fetch reviews:', error)
+    doctorReviews.value = []
+  } finally {
+    reviewsLoading.value = false
+  }
+}
+
+
 onMounted(() => {
 
   fetchDoctor()
+  fetchReviews()
 
 })
 
 
-function openBookingDialog() {
+const availableSlots = ref([])
+const loadingSlots = ref(false)
+const slotsError = ref(null)
 
-  bookingStep.value = 0
+function formatSlotTime(t) {
+  if (!t) return ''
+  const parts = t.split(':')
+  if (parts.length < 2) return t
+  const hour = parseInt(parts[0], 10)
+  const ampm = hour >= 12 ? 'PM' : 'AM'
+  const h12 = hour % 12 || 12
+  return `${String(h12).padStart(2, '0')}:${parts[1]} ${ampm}`
+}
 
-  bookingForm.appointment_date = ''
-
+async function fetchDoctorSlots() {
   bookingForm.appointment_time = ''
+  if (!bookingForm.appointment_date || !doctor.value?.user) {
+    availableSlots.value = []
+    return
+  }
+  loadingSlots.value = true
+  slotsError.value = null
+  try {
+    const slots = await call('docbook.api.appointment.get_available_slots', {
+      doctor: doctor.value.user,
+      date: bookingForm.appointment_date,
+    })
+    availableSlots.value = Array.isArray(slots) ? slots : []
+  } catch (err) {
+    availableSlots.value = []
+    slotsError.value = err.message || 'Unable to load slots'
+  } finally {
+    loadingSlots.value = false
+  }
+}
 
+function selectSlot(slot) {
+  bookingForm.appointment_time = slot.start_time
+}
+
+function openBookingDialog() {
+  bookingStep.value = 0
+  bookingForm.appointment_date = ''
+  bookingForm.appointment_time = ''
   bookingForm.reason = ''
-
+  availableSlots.value = []
+  slotsError.value = null
   showBookingDialog.value = true
-
 }
 
 
@@ -829,7 +979,7 @@ async function confirmBooking(close) {
       error
     )
 
-    toast.error("Failed to create appointment")
+    toast.error(error?.message || "Failed to create appointment")
 
   } finally {
 
@@ -1848,6 +1998,88 @@ async function confirmBooking(close) {
 
 
 /* =========================================
+   REVIEWS
+========================================= */
+
+.section-heading {
+  display: flex;
+
+  align-items: center;
+
+  justify-content: space-between;
+}
+
+.section-heading h3 .reviews-count {
+  color: #94a3b8;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.reviews-summary {
+  color: #f59e0b;
+  font-weight: 800;
+  font-size: 16px;
+}
+
+.reviews-loading {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.reviews-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.review-item {
+  padding: 14px 16px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+}
+
+.review-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.review-stars {
+  display: flex;
+  gap: 2px;
+}
+
+.mini-star {
+  color: #e2e8f0;
+  font-size: 15px;
+}
+.mini-star.on {
+  color: #f59e0b;
+}
+
+.review-date {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.review-feedback {
+  margin: 0 0 6px;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.review-author {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+
+/* =========================================
    INFO GRID
 ========================================= */
 
@@ -2540,6 +2772,110 @@ async function confirmBooking(close) {
     padding-right: 18px;
   }
 
+}
+
+/* =========================================
+   AVAILABLE SLOTS PICKER
+========================================= */
+
+.slots-container {
+  margin: 16px 0 8px;
+}
+
+.slots-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.slots-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0;
+}
+
+.selected-time-badge {
+  font-size: 11px;
+  font-weight: 700;
+  color: #0d9488;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+  padding: 3px 8px;
+  border-radius: 9999px;
+}
+
+.slots-hint,
+.slots-loading {
+  font-size: 12px;
+  color: #64748b;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  border: 1px dashed #cbd5e1;
+}
+
+.slots-error {
+  font-size: 12px;
+  color: #dc2626;
+  background: #fef2f2;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+}
+
+.empty-slots-box {
+  font-size: 12px;
+  color: #b45309;
+  background: #fffbeb;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid #fde68a;
+  line-height: 1.5;
+}
+
+.slots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 4px;
+  margin-bottom: 8px;
+}
+
+.slot-btn {
+  padding: 8px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1.5px solid #e2e8f0;
+  background: #ffffff;
+  color: #1e293b;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: center;
+}
+
+.slot-btn:hover {
+  border-color: #0d9488;
+  background: #f0fdfa;
+  color: #0d9488;
+}
+
+.slot-btn.active {
+  background: #0d9488 !important;
+  color: #ffffff !important;
+  border-color: #0d9488 !important;
+  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.25);
+}
+
+.hours-hint {
+  font-size: 11px;
+  color: #64748b;
+  margin-top: 6px;
 }
 
 </style>

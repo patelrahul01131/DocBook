@@ -1,29 +1,68 @@
-// src/router.js
+// src/router/router.js
 import { createRouter, createWebHistory } from 'vue-router'
+
+// Landing (public marketing page shown at "/")
+import Landing from '../portals/Landing.vue'
+
+// Auth
+import Auth from '../components/auth.vue'
+
+// Patient portal
 import FindDoctors from '../portals/patient/Home.vue'
 import DoctorDetail from '../portals/patient/DoctorDetail.vue'
 import MyAppointments from '../portals/patient/MyAppointments.vue'
-import DoctorDashboard from '../portals/doctor/DoctorDashboard.vue'
-import DoctorAppointments from '../portals/doctor/DoctorAppointments.vue'
 import DoctorProfile from '../portals/patient/DoctorProfile.vue'
 import ShowAppointment from '../portals/patient/ShowAppointment.vue'
 import PatientDashboard from '../portals/patient/PatientDashboard.vue'
-import DoctorProfileBooking from '../portals/patient/DoctorProfileBooking.vue'
-import Auth from '../components/auth.vue'
+import MedicalHistory from '../portals/patient/MedicalHistory.vue'
+import Prescriptions from '../portals/patient/Prescriptions.vue'
+import MedicineReminders from '../portals/patient/MedicineReminders.vue'
+import MedicineCatalog from '../portals/patient/MedicineCatalog.vue'
+
+// Doctor portal
+import DoctorDashboard from '../portals/doctor/DoctorDashboard.vue'
+import DoctorAppointments from '../portals/doctor/DoctorAppointments.vue'
+import DoctorPatients from '../portals/doctor/DoctorPatients.vue'
+import ConsultationForm from '../portals/doctor/ConsultationForm.vue'
 
 const routes = [
-  { path: '/', redirect: '/login' },
+  { path: '/', component: Landing },
+
+  // Auth
   { path: '/login', component: Auth },
   { path: '/signup', component: Auth },
-  { path: '/home', component: FindDoctors },
-  { path: '/doctor/:id', component: DoctorDetail },
-  { path: '/my-appointments', component: MyAppointments },
-  { path: '/doctor', component: DoctorDashboard },
-  { path: '/doctor-appointments', component: DoctorAppointments },
-  {path: '/doctor_profile', component: DoctorProfile},
-  {path: '/show-appointment/:id', component: ShowAppointment},
-  {path: '/patient-dashboard', component: PatientDashboard},
-  {path: '/doctor-profile-booking', component: DoctorProfileBooking}
+
+  // Patient routes
+  { path: '/home', component: FindDoctors, meta: { public: true } },
+  { path: '/find-doctors', redirect: '/home' },
+  { path: '/doctor/:id', component: DoctorDetail, meta: { public: true } },
+  { path: '/my-appointments', component: MyAppointments, meta: { auth: true } },
+  { path: '/doctor_profile', component: DoctorProfile, meta: { public: true } },
+  { path: '/show-appointment/:id', component: ShowAppointment, meta: { auth: true } },
+  { path: '/patient-dashboard', component: PatientDashboard, meta: { auth: true } },
+  { path: '/medical-history', component: MedicalHistory, meta: { auth: true } },
+  { path: '/prescriptions', component: Prescriptions, meta: { auth: true } },
+  { path: '/medicine-reminders', component: MedicineReminders, meta: { auth: true } },
+  { path: '/medicines', component: MedicineCatalog, meta: { auth: true } },
+
+  // Doctor routes
+  { path: '/doctor', component: DoctorDashboard, meta: { auth: true } },
+  { path: '/doctor-appointments', component: DoctorAppointments, meta: { auth: true } },
+  { path: '/doctor-patients', component: DoctorPatients, meta: { auth: true } },
+  { path: '/consultation/:id', component: ConsultationForm, meta: { auth: true } },
+
+  // Fallback → landing
+  { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
-export default createRouter({ history: createWebHistory(), routes })
+const router = createRouter({ history: createWebHistory(), routes })
+
+// Routes that render WITHOUT the portal chrome (sidebar/drawer).
+export const standaloneRoutes = ['/', '/login', '/signup']
+
+export function isStandaloneRoute(path) {
+  return standaloneRoutes.includes(path)
+}
+
+export default router
+
