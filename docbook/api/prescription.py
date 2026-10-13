@@ -376,6 +376,16 @@ def add_prescription_medicine(
 		}
 	)
 
+	# Frappe auto-fills empty Time fields with the current time on insert
+	# (via new_doc defaults). Stop that so unused dose_time slots stay empty
+	# instead of becoming phantom "now" values that spawn duplicate reminders.
+	doc.dont_update_if_missing = [
+		"dose_time_1",
+		"dose_time_2",
+		"dose_time_3",
+		"dose_time_4",
+	]
+
 	doc.insert(ignore_permissions=is_admin)
 
 	# Schedule reminders for this medicine
@@ -388,16 +398,32 @@ def add_prescription_medicine(
 
 def _schedule_reminders_for_medicine(med_doc):
 	"""Generate Medicine Reminder records for the prescribed medicine schedule."""
-	if med_doc.frequency == "As Needed" or med_doc.status != "Active":
+	if med_doc.status != "Active":
 		return
 
-	dose_times = [
+	# Only daily-fixed frequencies have a predictable schedule. "As Needed"
+	# and "Other" are intentionally skipped.
+	freq_dose_count = {
+		"Once Daily": 1,
+		"Twice Daily": 2,
+		"Three Times Daily": 3,
+		"Four Times Daily": 4,
+	}
+	expected = freq_dose_count.get(med_doc.frequency)
+	if not expected:
+		return
+
+	# Cap to the number of dose times the frequency expects. This guards
+	# against legacy/corrupt records where Frappe auto-filled the unused
+	# Time fields with the creation timestamp (which produced duplicate
+	# reminders at "now" instead of the real dose time).
+	all_dose_times = [
 		med_doc.dose_time_1,
 		med_doc.dose_time_2,
 		med_doc.dose_time_3,
 		med_doc.dose_time_4,
 	]
-	dose_times = [t for t in dose_times if t]
+	dose_times = [t for t in all_dose_times[:expected] if t]
 
 	if not dose_times:
 		return
@@ -694,6 +720,13 @@ def update_prescription_medicine(
 			frappe.throw(_("You are not authorized to edit this medicine"), frappe.PermissionError)
 
 	doc = frappe.get_doc("Prescription Medicine", medicine_record)
+	# Keep empty Time slots empty (Frappe would otherwise default them to "now").
+	doc.dont_update_if_missing = [
+		"dose_time_1",
+		"dose_time_2",
+		"dose_time_3",
+		"dose_time_4",
+	]
 	if dosage is not None:
 		doc.dosage = dosage
 	if frequency is not None:
@@ -718,6 +751,17 @@ def update_prescription_medicine(
 		doc.status = status
 
 	doc.save(ignore_permissions=True)
+
+	# The schedule may have changed (frequency, dose times or dates). Drop the
+	# old pending reminders and regenerate so edits take effect and any stale
+	# duplicate reminders are cleared.
+	if doc.status == "Active":
+		frappe.db.delete(
+			"Medicine Reminder",
+			{"prescription_medicine": doc.name, "reminder_status": "Pending"},
+		)
+		_schedule_reminders_for_medicine(doc)
+
 	frappe.db.commit()
 	return {"success": True, "name": doc.name}
 

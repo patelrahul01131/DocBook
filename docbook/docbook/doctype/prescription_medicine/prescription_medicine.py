@@ -5,6 +5,17 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+# Number of daily dose times each frequency expects. Frappe's ``new_doc``
+# auto-populates empty ``Time`` fields with the *current* time on insert, so
+# we cap stored dose times to this count to avoid persisting phantom "now"
+# values (which otherwise spawn duplicate reminders at the wrong time).
+FREQUENCY_DOSE_COUNT = {
+	"Once Daily": 1,
+	"Twice Daily": 2,
+	"Three Times Daily": 3,
+	"Four Times Daily": 4,
+}
+
 
 class PrescriptionMedicine(Document):
 	def validate(self):
@@ -51,8 +62,34 @@ class PrescriptionMedicine(Document):
 					parts.append(f"({med.dosage_form})")
 				self.prescribed_medicine_name = " ".join(parts)
 
+		# Drop any dose times the framework auto-filled with the current time
+		# (Frappe initialises empty Time fields to "now" on insert). Keep only
+		# as many dose times as the frequency actually expects.
+		self._trim_dose_times()
+
 		# Validate dose times against frequency
 		self._validate_dose_times()
+
+	def _trim_dose_times(self):
+		"""Null out dose_time slots beyond what the frequency requires.
+
+		Frappe's ``new_doc`` populates *every* empty ``Time`` field with the
+		current time when a document is created. For "Once Daily" that means
+		dose_time_2/3/4 silently become the creation timestamp, which later
+		produces duplicate reminders. Trim them here so only the expected
+		number of dose times is ever persisted.
+		"""
+		expected = FREQUENCY_DOSE_COUNT.get(self.frequency or "")
+		if not expected:
+			# "As Needed" / "Other" / unknown: no fixed daily schedule, so
+			# clear all dose times to avoid persisting phantom "now" values.
+			if self.frequency in ("As Needed", "Other"):
+				for i in range(1, 5):
+					self.set(f"dose_time_{i}", None)
+			return
+
+		for i in range(expected + 1, 5):
+			self.set(f"dose_time_{i}", None)
 
 	def _validate_dose_times(self):
 		freq = self.frequency or ""
@@ -64,15 +101,8 @@ class PrescriptionMedicine(Document):
 		]
 		filled = [t for t in times if t]
 
-		freq_map = {
-			"Once Daily": 1,
-			"Twice Daily": 2,
-			"Three Times Daily": 3,
-			"Four Times Daily": 4,
-		}
-
-		if freq in freq_map:
-			expected = freq_map[freq]
+		if freq in FREQUENCY_DOSE_COUNT:
+			expected = FREQUENCY_DOSE_COUNT[freq]
 			if len(filled) > expected:
 				frappe.msgprint(
 					_(f"Note: {freq} typically requires {expected} dose time(s), but {len(filled)} were provided.")

@@ -89,6 +89,7 @@ async function send(text) {
 
   try {
     const res = await call('docbook.api.agent.chat', { message: content }, { quiet: true })
+    console.log(`[AgentChat] assistant message: ${res?.reply}`)
     const reply = res?.reply || "I'm sorry, I couldn't generate a response."
     messages.value[pendingIndex] = { role: 'assistant', content: reply }
   } catch (e) {
