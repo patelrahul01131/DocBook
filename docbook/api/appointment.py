@@ -53,18 +53,58 @@ def _get_hospital_settings():
 
 
 def _get_doctor_name(doctor):
-    """Accept either a Doctor Profile name or the doctor's User email."""
+    """Resolve a doctor identifier to its Doctor Profile name.
+
+    Accepts a Doctor Profile id, the linked User email (case-insensitive),
+    or a human display name such as "Dr. Bhagyesh" / "bhagyesh"
+    (case-insensitive, optional "Dr." prefix, exact full_name first,
+    then substring match).
+    """
+    import re as _re
+
     if not doctor:
+        frappe.throw(_("Doctor is required"))
+    key = str(doctor).strip()
+    if not key:
         frappe.throw(_("Doctor is required"))
 
     # Direct match on Doctor Profile primary key
-    if frappe.db.exists("Doctor Profile", doctor):
-        return doctor
+    if frappe.db.exists("Doctor Profile", key):
+        return key
 
-    # Match by linked User account
-    doctor_name = frappe.db.get_value("Doctor Profile", {"user": doctor}, "name")
+    # Match by linked User account (exact, then case-insensitive email)
+    doctor_name = frappe.db.get_value("Doctor Profile", {"user": key}, "name")
     if doctor_name:
         return doctor_name
+    try:
+        ci = frappe.db.sql(
+            "SELECT name FROM `tabDoctor Profile` WHERE LOWER(user) = LOWER(%(u)s) LIMIT 1",
+            {"u": key},
+            as_dict=True,
+        )
+        if ci:
+            return ci[0]["name"]
+    except Exception:
+        pass
+
+    # Human display-name match against full_name.
+    cleaned = _re.sub(r"^\s*dr\.?\s+", "", key, flags=_re.IGNORECASE).strip().lower()
+    if cleaned:
+        try:
+            rows = frappe.get_all("Doctor Profile", fields=["name", "full_name"]) or []
+        except Exception:
+            rows = []
+        norm = {}
+        for r in rows:
+            full = _re.sub(r"^\s*dr\.?\s+", "", str(r.get("full_name") or ""), flags=_re.IGNORECASE).strip().lower()
+            norm[r["name"]] = full
+        for name, full in norm.items():
+            if full and full == cleaned:
+                return name
+        for name, full in norm.items():
+            name_l = str(name or "").lower()
+            if (full and (cleaned in full or full in cleaned)) or (name_l and (cleaned in name_l or name_l in cleaned)):
+                return name
 
     frappe.throw(_("Doctor profile not found for '{0}'").format(doctor))
 
@@ -201,11 +241,17 @@ def validate_appointment_booking(
     appointment_date,
     appointment_time,
     exclude_appointment=None,
+    immediate=False,
 ):
     """
     Comprehensive, production-grade validation for appointment booking and rescheduling.
     Validates doctor approval, date/time boundaries, hospital hours, notice, holidays,
     doctor leaves, and slot collision for both doctor and patient.
+
+    ``immediate=True`` relaxes only the "must be in the future / notice period" rules so a
+    patient physically at the reception desk can be booked for *right now* (or slotted
+    earlier today). Every other rule — not-in-the-past day, hospital hours, holidays,
+    doctor leave, double-booking, advance window — still applies.
     """
     # 1. Resolve & validate Doctor
     doctor_name = _get_doctor_name(doctor)
@@ -238,8 +284,10 @@ def validate_appointment_booking(
     now = frappe.utils.now_datetime()
     apt_dt = datetime.combine(apt_date, apt_time)
 
-    # 4. Strict Past Check (Date & Time)
-    if apt_dt <= now:
+    # 4. Past Check (Date always enforced; exact time only unless immediate walk-in)
+    if apt_date < now.date():
+        frappe.throw(_("Cannot book or reschedule an appointment for a past date"))
+    if not immediate and apt_dt <= now:
         frappe.throw(_("Cannot book or reschedule an appointment for a past date or time"))
 
     # 5. Hospital Operational Settings
@@ -248,9 +296,9 @@ def validate_appointment_booking(
     buffer_min = cfg["buffer_minutes"]
     end_time = (apt_dt + timedelta(minutes=duration)).time()
 
-    # 6. Minimum Booking Notice
+    # 6. Minimum Booking Notice (skipped for immediate walk-in / at-desk bookings)
     notice_minutes = cfg["notice_minutes"]
-    if apt_dt < now + timedelta(minutes=notice_minutes):
+    if not immediate and apt_dt < now + timedelta(minutes=notice_minutes):
         frappe.throw(_("Appointments must be booked at least {0} minutes in advance").format(notice_minutes))
 
     # 7. Maximum Booking Window
@@ -405,7 +453,14 @@ def show_appointment(appointment_id):
             a.consultation_notes,
             a.treatment_plan,
             a.follow_up_date,
-            a.follow_up_instructions
+            a.follow_up_instructions,
+            a.referral,
+            a.visit_stage,
+            a.queue_token,
+            a.priority,
+            a.checked_in,
+            a.checked_in_at,
+            a.called_at
         FROM `tabAppointment` a
         WHERE a.name = %(id)s OR a.slot = %(id)s
         LIMIT 1
@@ -488,11 +543,49 @@ def show_appointment(appointment_id):
             as_dict=True,
         )
 
+    # Fetch reports linked to this appointment OR shared across its referral episode
+    report_fields = [
+        "name", "appointment", "referral", "ordered_by", "report_type", "title",
+        "laboratory", "external", "status", "report_file", "findings", "description",
+        "uploaded_by", "uploaded_at", "reviewed_by", "reviewed_at", "creation",
+    ]
+    if appt_data.referral:
+        reports = frappe.get_all(
+            "Patient Report",
+            or_filters=[["appointment", "=", appt_data.name], ["referral", "=", appt_data.referral]],
+            fields=report_fields,
+            order_by="creation desc",
+        )
+    else:
+        reports = frappe.get_all(
+            "Patient Report",
+            filters={"appointment": appt_data.name},
+            fields=report_fields,
+            order_by="creation desc",
+        )
+
+    # Shared referral episode (both doctors + the other linked appointment)
+    referral_data = None
+    if appt_data.referral:
+        referral_data = frappe.get_all(
+            "Referral",
+            filters={"name": appt_data.referral},
+            fields=[
+                "name", "patient", "referring_doctor", "referred_to_doctor", "specialty",
+                "source_appointment", "target_appointment", "status", "reason",
+                "clinical_notes", "referral_date",
+            ],
+            limit=1,
+        )
+        referral_data = referral_data[0] if referral_data else None
+
     return {
         **appt_data,
         "doctor_info": doctor_data,
         "patient_info": patient_data,
         "prescriptions": prescriptions,
+        "reports": reports,
+        "referral": referral_data,
     }
 
 
@@ -809,10 +902,11 @@ def update_appointment_status(appointment_id, status):
 
 
 @frappe.whitelist()
-def get_available_slots(doctor, date):
+def get_available_slots(doctor, date, exclude_appointment=None):
     """
     Generate available appointment slots for one doctor and date.
     Respects hospital working hours, holidays, doctor leaves, and existing bookings.
+    ``exclude_appointment`` frees the caller's own slot so reschedules can reuse it.
     """
     doctor_name = _get_doctor_name(doctor)
     date_val = frappe.utils.getdate(date)
@@ -853,7 +947,9 @@ def get_available_slots(doctor, date):
         if current_dt >= now + timedelta(minutes=notice_min):
             # Check leave & booked
             is_leave = _doctor_has_leave(doctor_name, date_val, slot_start, slot_end)
-            is_booked = _slot_is_booked(doctor_name, date_val, slot_start, slot_end)
+            is_booked = _slot_is_booked(
+                doctor_name, date_val, slot_start, slot_end,
+                exclude_appointment=exclude_appointment)
 
             if not is_leave and not is_booked:
                 slots.append({

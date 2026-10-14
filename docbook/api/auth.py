@@ -122,8 +122,15 @@ def get_current_user():
             full_name = patient.full_name or user_data.full_name
             phone = patient.phone
         else:
-            # Authenticated Frappe user without a DocBook profile.
-            role = "User"
+            # Staff accounts (Receptionist / Laboratory) without a DocBook
+            # patient/doctor profile.
+            user_roles = frappe.get_roles(current_user)
+            if "Receptionist" in user_roles:
+                role = "Receptionist"
+            elif "Laboratory" in user_roles:
+                role = "Laboratory"
+            else:
+                role = "User"
             profile_name = None
             full_name = user_data.full_name
             phone = None
@@ -168,6 +175,13 @@ def get_login_redirect():
             "role": "Doctor",
             "redirect": "/doctor"
         }
+
+    # Staff portal roles.
+    roles = frappe.get_roles(email)
+    if "Receptionist" in roles:
+        return {"role": "Receptionist", "redirect": "/receptionist"}
+    if "Laboratory" in roles:
+        return {"role": "Laboratory", "redirect": "/laboratory"}
 
     patient = frappe.db.exists(
         "Patient Profile",

@@ -258,7 +258,13 @@ Rules: rescheduling is a TRUE IN-PLACE EDIT of the same appointment \
 (same APT id, same record) — NEVER cancel+rebook, NEVER create a second \
 appointment, NEVER say "cancel ... to free the slot for booking". One \
 reschedule_appointment call validates (hours, holidays, doctor leave, slot \
-conflicts) and moves it atomically. Cancel is also single-call: an explicit \
+conflicts) and moves it atomically. MOVING TO A SOONER DAY IS STILL A RESCHEDULE: \
+if the patient already has an upcoming appointment with a doctor and then asks \
+to come SOONER / TODAY / EARLIER / LATER / "it's urgent" / "another day" / a \
+different date — that is a MOVE of the existing appointment (reschedule_appointment), \
+NOT a new booking. Do NOT call book_appointment and do NOT cancel the old one. \
+book_appointment is only for a brand-new appointment when the patient has NO \
+active appointment with that doctor. Cancel is also single-call: an explicit \
 "cancel ..." request executes immediately. ONLY delete needs two steps \
 (preview first, then confirm=true) because it is irreversible. Completed \
 visit records can NEVER be changed or deleted. Clinical fields (diagnosis, \
@@ -366,6 +372,22 @@ TOOLS = [
 	{
 		"type": "function",
 		"function": {
+			"name": "get_my_reports",
+			"description": "List the patient's lab/imaging/diagnostic reports (title, type, status, laboratory, upload date). Use when the user asks about their reports, test results, or lab work.",
+			"parameters": {"type": "object", "properties": {}, "required": []},
+		},
+	},
+	{
+		"type": "function",
+		"function": {
+			"name": "get_my_referrals",
+			"description": "List the patient's doctor referrals (referring doctor, referred-to doctor/specialty, status, reason). Use when the user asks who they were referred to or about a referral.",
+			"parameters": {"type": "object", "properties": {}, "required": []},
+		},
+	},
+	{
+		"type": "function",
+		"function": {
 			"name": "get_my_profile",
 			"description": "Get the logged-in patient's own profile information.",
 			"parameters": {"type": "object", "properties": {}, "required": []},
@@ -429,11 +451,14 @@ TOOLS = [
 			"name": "book_appointment",
 			"description": (
 				"Book a NEW appointment for the logged-in patient with a chosen "
-				"doctor, date, time and reason. Only creates a new appointment; "
-				"cannot modify existing ones. Pass appointment_date as YYYY-MM-DD "
-				"(convert relative dates like 'tomorrow' to an actual date first) "
-				"and appointment_time as HH:MM 24h (convert '2:30 PM' to '14:30'). "
-				"Use the doctor email from list_doctors 'id' — never invent one."
+				"doctor, date, time and reason. Only for a brand-new visit when the "
+				"patient has NO active appointment with that doctor. If they ALREADY "
+				"have an upcoming appointment with this doctor and want to come "
+				"sooner/today/earlier/later/another day, use reschedule_appointment "
+				"to MOVE it instead — never book a second one. Pass appointment_date "
+				"as YYYY-MM-DD (convert relative dates like 'tomorrow' to an actual "
+				"date first) and appointment_time as HH:MM 24h (convert '2:30 PM' to "
+				"'14:30'). Use the doctor email from list_doctors 'id' — never invent one."
 			),
 			"parameters": {
 				"type": "object",
@@ -750,6 +775,58 @@ def _t_get_my_medical_history(patient, args):
 		"records": out,
 		"note": "Latest 3 shown. Ask for more if needed.",
 	}
+
+
+def _t_get_my_reports(patient, args):
+	rows = frappe.get_all(
+		"Patient Report",
+		filters={"patient": patient},
+		fields=["name", "report_type", "title", "laboratory", "external", "status",
+			"uploaded_at", "findings"],
+		order_by="creation desc",
+	)
+	out = []
+	for r in rows[:5]:
+		out.append({
+			"id": r.name,
+			"title": r.title,
+			"type": r.report_type,
+			"laboratory": r.laboratory,
+			"status": r.status,
+			"uploaded_at": r.uploaded_at,
+			"external": bool(r.external),
+		})
+	return {
+		"count": len(rows),
+		"reports": out,
+		"note": "Latest 5 shown." if len(rows) > 5 else None,
+	}
+
+
+def _t_get_my_referrals(patient, args):
+	rows = frappe.get_all(
+		"Referral",
+		filters={"patient": patient},
+		fields=["name", "referring_doctor", "referred_to_doctor", "specialty",
+			"status", "reason", "referral_date"],
+		order_by="referral_date desc",
+	)
+	out = []
+	for r in rows[:5]:
+		referred_name = frappe.db.get_value("Doctor Profile", r.referred_to_doctor, "full_name") \
+			or r.referred_to_doctor
+		referring_name = frappe.db.get_value("Doctor Profile", r.referring_doctor, "full_name") \
+			or r.referring_doctor
+		out.append({
+			"id": r.name,
+			"referred_to": referred_name,
+			"referred_by": referring_name,
+			"specialty": r.specialty,
+			"status": r.status,
+			"reason": r.reason,
+			"date": r.referral_date,
+		})
+	return {"count": len(rows), "referrals": out}
 
 
 def _t_get_my_reminders(patient, args):
@@ -1285,27 +1362,55 @@ def _t_book_appointment(patient, args):
 	# this doctor on this date, return the existing receipt instead of
 	# creating a duplicate (also makes LLM retries safe).
 	try:
-		doctor_name = frappe.db.get_value("Doctor Profile", {"user": doctor}, "name") or doctor
+		from docbook.api.appointment import _get_doctor_name as _resolve_doc
+		try:
+			doctor_name = _resolve_doc(doctor)
+		except Exception:
+			doctor_name = frappe.db.get_value("Doctor Profile", {"user": doctor}, "name") or doctor
 		existing = frappe.get_all(
 			"Appointment",
 			filters={
 				"patient": patient.name,
 				"doctor": doctor_name,
-				"appointment_date": date,
 				"status": ["in", ["Pending", "Confirmed"]],
 			},
-			fields=["name", "appointment_time", "status"],
-			limit_page_length=1,
+			fields=["name", "appointment_date", "appointment_time", "status"],
+			order_by="appointment_date asc, appointment_time asc",
+			limit_page_length=5,
 		)
 		if existing:
+			row = existing[0]
+			ex_date = str(row.appointment_date)
+			ex_time = str(row.appointment_time)[:5]
+			# Exact duplicate (same doctor, same date AND time): idempotent
+			# receipt, never create a second row (also makes LLM retries safe).
+			if ex_date == date and ex_time == str(time_val)[:5]:
+				return {
+					"success": True,
+					"appointment_id": row.name,
+					"already_booked": True,
+					"message": (
+						f"You already have an appointment booked on {ex_date} "
+						f"at {ex_time}. Status: {row.status}."
+					),
+				}
+			# Same doctor, different date/time (e.g. "urgent, go today",
+			# "earlier", "a different day"): do NOT book a second appointment
+			# and do NOT cancel the old one — instruct the model to MOVE the
+			# existing appointment via reschedule_appointment (same APT id).
 			return {
-				"success": True,
-				"appointment_id": existing[0].name,
-				"already_booked": True,
-				"message": (
-					f"You already have an appointment booked on {date} "
-					f"at {(existing[0].appointment_time or '')[:5] if hasattr(existing[0].appointment_time, '__getitem__') else existing[0].appointment_time}. "
-					f"Status: {existing[0].status}."
+				"success": False,
+				"needs_reschedule": True,
+				"appointment_id": row.name,
+				"existing_date": ex_date,
+				"existing_time": ex_time,
+				"requested_date": date,
+				"requested_time": str(time_val)[:5],
+				"error": (
+					f"You already have appointment {row.name} with this doctor on "
+					f"{ex_date} at {ex_time}. Do NOT create a new appointment and do "
+					f"NOT cancel it. Call reschedule_appointment to MOVE it to {date} "
+					f"at {str(time_val)[:5]} (use appointment='{row.name}' or 'latest')."
 				),
 			}
 	except Exception:
@@ -1356,6 +1461,8 @@ TOOL_IMPLEMENTATIONS = {
 	"get_my_prescriptions": _t_get_my_prescriptions,
 	"get_prescription_detail": _t_get_prescription_detail,
 	"get_my_medical_history": _t_get_my_medical_history,
+	"get_my_reports": _t_get_my_reports,
+	"get_my_referrals": _t_get_my_referrals,
 	"get_my_reminders": _t_get_my_reminders,
 	"get_my_profile": _t_get_my_profile,
 	"list_doctors": _t_list_doctors,
@@ -1643,11 +1750,15 @@ def _fast_path_reply(message, first_name):
 # ---------------------------------------------------------------------------
 
 _BOOKING_CLAIM_RE = re.compile(
-	r"(appointment\s+(is\s+)?(booked|confirmed|scheduled|done|created|moved|rescheduled|cancelled|deleted|updated)|"
+	r"(appointment(.{0,80}?)is\s+(now\s+)?(booked|confirmed|scheduled|done|created|moved|rescheduled|cancelled|deleted|updated)|"
+	r"is\s+now\s+(booked|confirmed|scheduled|reserved)|"
+	r"(booked|confirmed|scheduled)\s+(for|with|on)|"
 	r"booked\s+(your|the)\s+appointment|slot\s+(is\s+)?(booked|reserved|confirmed)|"
 	r"(moved|rescheduled|cancelled|deleted)\s+(your|the)\s+appointment|"
+	r"(reschedule|booking)\s+(is\s+)?confirmed|"
+	r"please\s+arrive\s+\d+\s+minutes\s+early|"
 	r"has\s+been\s+(booked|confirmed|cancelled|deleted|rescheduled|moved|updated))",
-	re.IGNORECASE,
+	re.IGNORECASE | re.DOTALL,
 )
 
 

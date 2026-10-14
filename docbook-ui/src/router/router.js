@@ -24,6 +24,14 @@ import DoctorDashboard from '../portals/doctor/DoctorDashboard.vue'
 import DoctorAppointments from '../portals/doctor/DoctorAppointments.vue'
 import DoctorPatients from '../portals/doctor/DoctorPatients.vue'
 import ConsultationForm from '../portals/doctor/ConsultationForm.vue'
+import Referrals from '../portals/doctor/Referrals.vue'
+
+// Patient reports
+import Reports from '../portals/patient/Reports.vue'
+
+// Receptionist + Laboratory portals
+import QueueDashboard from '../portals/receptionist/QueueDashboard.vue'
+import LabWorklist from '../portals/lab/LabWorklist.vue'
 
 const routes = [
   { path: '/', component: Landing },
@@ -50,6 +58,14 @@ const routes = [
   { path: '/doctor-appointments', component: DoctorAppointments, meta: { auth: true } },
   { path: '/doctor-patients', component: DoctorPatients, meta: { auth: true } },
   { path: '/consultation/:id', component: ConsultationForm, meta: { auth: true } },
+  { path: '/referrals', component: Referrals, meta: { auth: true } },
+
+  // Patient reports
+  { path: '/reports', component: Reports, meta: { auth: true } },
+
+  // Receptionist + Laboratory
+  { path: '/receptionist', component: QueueDashboard, meta: { auth: true } },
+  { path: '/laboratory', component: LabWorklist, meta: { auth: true } },
 
   // Fallback → landing
   { path: '/:pathMatch(.*)*', redirect: '/' },

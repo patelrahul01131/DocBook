@@ -463,6 +463,117 @@ function statusClass(s) {
   return `db-badge db-badge--${(s || '').toLowerCase()}`
 }
 
+// ---- Reports & Referral ----
+const reportTypes = ['Lab', 'Imaging', 'Prescription', 'Document', 'Other']
+const showOrderReport = ref(false)
+const orderingReport = ref(false)
+const orderReportError = ref(null)
+const reportForm = ref({ report_type: 'Lab', title: '', description: '', laboratory: '' })
+
+const showRefer = ref(false)
+const creatingReferral = ref(false)
+const referError = ref(null)
+const specialistDoctors = ref([])
+const availableSlots = ref([])
+const slotsLoading = ref(false)
+const referForm = ref({ referred_to_doctor: '', appointment_date: '', appointment_time: '', reason: '', clinical_notes: '' })
+
+function openOrderReport() {
+  orderReportError.value = null
+  reportForm.value = { report_type: 'Lab', title: '', description: '', laboratory: '' }
+  showOrderReport.value = true
+}
+
+async function submitOrderReport() {
+  if (!reportForm.value.title.trim()) {
+    orderReportError.value = 'Report title is required.'
+    return
+  }
+  orderingReport.value = true
+  orderReportError.value = null
+  try {
+    await call('docbook.api.report.order_report', {
+      appointment: appointment.value.name,
+      report_type: reportForm.value.report_type,
+      title: reportForm.value.title,
+      description: reportForm.value.description,
+      laboratory: reportForm.value.laboratory,
+    })
+    showOrderReport.value = false
+    await fetchAppointment()
+  } catch (e) {
+    orderReportError.value = e.message || 'Failed to order report.'
+  } finally {
+    orderingReport.value = false
+  }
+}
+
+async function openRefer() {
+  referError.value = null
+  availableSlots.value = []
+  referForm.value = { referred_to_doctor: '', appointment_date: '', appointment_time: '', reason: '', clinical_notes: '' }
+  showRefer.value = true
+  if (!specialistDoctors.value.length) {
+    try {
+      const all = await call('docbook.api.doctor.list_doctors') || []
+      specialistDoctors.value = all.filter((d) => d.user && d.user !== appointment.value?.doctor)
+    } catch {
+      specialistDoctors.value = []
+    }
+  }
+}
+
+async function loadSlots() {
+  availableSlots.value = []
+  referForm.value.appointment_time = ''
+  if (!referForm.value.referred_to_doctor || !referForm.value.appointment_date) return
+  slotsLoading.value = true
+  try {
+    const res = await call('docbook.api.appointment.get_available_slots', {
+      doctor: referForm.value.referred_to_doctor,
+      date: referForm.value.appointment_date,
+    })
+    availableSlots.value = res || []
+  } catch {
+    availableSlots.value = []
+  } finally {
+    slotsLoading.value = false
+  }
+}
+
+async function submitReferral() {
+  if (!referForm.value.referred_to_doctor) {
+    referError.value = 'Select a specialist.'
+    return
+  }
+  if (!referForm.value.reason.trim()) {
+    referError.value = 'A reason for the referral is required.'
+    return
+  }
+  if (!referForm.value.appointment_date || !referForm.value.appointment_time) {
+    referError.value = 'Pick an appointment date and available time for the specialist.'
+    return
+  }
+  creatingReferral.value = true
+  referError.value = null
+  try {
+    await call('docbook.api.referral.create_referral', {
+      source_appointment: appointment.value.name,
+      referred_to_doctor: referForm.value.referred_to_doctor,
+      reason: referForm.value.reason,
+      clinical_notes: referForm.value.clinical_notes,
+      appointment_date: referForm.value.appointment_date,
+      appointment_time: referForm.value.appointment_time,
+    })
+    showRefer.value = false
+    await fetchAppointment()
+  } catch (e) {
+    referError.value = e.message || 'Failed to create referral.'
+  } finally {
+    creatingReferral.value = false
+  }
+}
+
 onMounted(fetchAppointment)
 </script>
 
@@ -545,6 +656,42 @@ onMounted(fetchAppointment)
             <button class="db-btn db-btn--primary" :disabled="savingConsultation" @click="saveConsultation">
               {{ savingConsultation ? 'Saving…' : '💾 Save Consultation' }}
             </button>
+          </div>
+        </div>
+
+        <!-- SECTION: Reports & Referral -->
+        <div class="db-card consult-section">
+          <div class="section-head">
+            <span class="section-icon">🧪</span>
+            <h2 class="db-section-title">Reports &amp; Referral</h2>
+            <div style="margin-left:auto; display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="db-btn db-btn--secondary" @click="openOrderReport">📄 Order Report</button>
+              <button class="db-btn db-btn--primary" @click="openRefer">🤝 Refer to Specialist</button>
+            </div>
+          </div>
+
+          <div v-if="appointment.reports && appointment.reports.length">
+            <div v-for="rp in appointment.reports" :key="rp.name" class="report-row">
+              <div class="report-info">
+                <strong>{{ rp.title }}</strong>
+                <span class="report-sub">{{ rp.report_type }}
+                  <template v-if="rp.laboratory"> · {{ rp.laboratory }}</template>
+                  <template v-if="rp.external"> · External</template>
+                </span>
+                <p v-if="rp.description" class="report-desc">{{ rp.description }}</p>
+                <p v-if="rp.findings" class="report-findings">{{ rp.findings }}</p>
+              </div>
+              <div class="report-side">
+                <span class="report-status" :class="`report-status--${(rp.status || '').toLowerCase()}`">{{ rp.status }}</span>
+                <a v-if="rp.report_file" :href="rp.report_file" target="_blank" class="report-open">Open ↗</a>
+              </div>
+            </div>
+          </div>
+          <p v-else class="report-empty">No reports ordered for this visit yet.</p>
+
+          <div v-if="appointment.referral" class="refer-summary">
+            <div><strong>Referral:</strong> {{ appointment.referral.name }} → {{ appointment.referral.specialty || 'Specialist' }} · {{ appointment.referral.status }}</div>
+            <div v-if="appointment.referral.reason"><strong>Reason:</strong> {{ appointment.referral.reason }}</div>
           </div>
         </div>
 
@@ -984,6 +1131,96 @@ onMounted(fetchAppointment)
         </div>
       </div>
     </div>
+    <!-- ======= ORDER REPORT MODAL ======= -->
+    <div v-if="showOrderReport" class="modal-overlay" @click.self="showOrderReport = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">📄 Order Report</h3>
+          <button class="modal-close" @click="showOrderReport = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid-2">
+            <div class="db-form-group">
+              <label class="db-label">Report Type</label>
+              <select v-model="reportForm.report_type" class="db-select">
+                <option v-for="t in reportTypes" :key="t" :value="t">{{ t }}</option>
+              </select>
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Laboratory / Provider</label>
+              <input v-model="reportForm.laboratory" type="text" class="db-input" placeholder="e.g. Metropolis, in-house lab" />
+            </div>
+          </div>
+          <div class="db-form-group">
+            <label class="db-label">Title *</label>
+            <input v-model="reportForm.title" type="text" class="db-input" placeholder="e.g. Complete Blood Count (CBC)" />
+          </div>
+          <div class="db-form-group">
+            <label class="db-label">Description / Instructions</label>
+            <textarea v-model="reportForm.description" class="db-textarea" rows="2" placeholder="Clinical context or special instructions…"></textarea>
+          </div>
+          <div v-if="orderReportError" class="db-error-panel">{{ orderReportError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showOrderReport = false">Cancel</button>
+          <button class="db-btn db-btn--primary" :disabled="orderingReport" @click="submitOrderReport">
+            {{ orderingReport ? 'Ordering…' : '📄 Order Report' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= REFER TO SPECIALIST MODAL ======= -->
+    <div v-if="showRefer" class="modal-overlay" @click.self="showRefer = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">🤝 Refer to Specialist</h3>
+          <button class="modal-close" @click="showRefer = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="db-form-group">
+            <label class="db-label">Specialist *</label>
+            <select v-model="referForm.referred_to_doctor" class="db-select" @change="loadSlots">
+              <option value="" disabled>— Select a specialist —</option>
+              <option v-for="d in specialistDoctors" :key="d.user" :value="d.user">
+                {{ d.full_name }} — {{ d.specialty || 'Specialist' }}{{ d.qualification ? ' (' + d.qualification + ')' : '' }}
+              </option>
+            </select>
+            <p v-if="!specialistDoctors.length" class="report-empty">No other approved doctors available.</p>
+          </div>
+
+          <div class="form-grid-2">
+            <div class="db-form-group">
+              <label class="db-label">Appointment Date *</label>
+              <input v-model="referForm.appointment_date" type="date" class="db-input" @change="loadSlots" />
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Available Time *</label>
+              <select v-model="referForm.appointment_time" class="db-select" :disabled="slotsLoading || !availableSlots.length">
+                <option value="" disabled>{{ slotsLoading ? 'Loading…' : (availableSlots.length ? '— Select time —' : 'No slots') }}</option>
+                <option v-for="s in availableSlots" :key="s.start_time" :value="s.start_time">{{ s.start_time.slice(0, 5) }}</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="db-form-group">
+            <label class="db-label">Reason for Referral *</label>
+            <textarea v-model="referForm.reason" class="db-textarea" rows="2" placeholder="Why is this patient being referred?"></textarea>
+          </div>
+          <div class="db-form-group">
+            <label class="db-label">Clinical Notes</label>
+            <textarea v-model="referForm.clinical_notes" class="db-textarea" rows="2" placeholder="Findings, history, and context for the specialist…"></textarea>
+          </div>
+          <div v-if="referError" class="db-error-panel">{{ referError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showRefer = false">Cancel</button>
+          <button class="db-btn db-btn--primary" :disabled="creatingReferral" @click="submitReferral">
+            {{ creatingReferral ? 'Creating…' : '🤝 Create Referral & Book' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1401,4 +1638,19 @@ onMounted(fetchAppointment)
   .dose-times-grid { grid-template-columns: 1fr 1fr; }
   .db-page { padding: 16px 16px 48px; }
 }
+/* Reports & Referral */
+.report-row { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 10px; background: #fafcff; }
+.report-info strong { font-size: 14px; color: #0f172a; display: block; }
+.report-sub { font-size: 12px; color: #64748b; }
+.report-desc { font-size: 13px; color: #475569; margin: 6px 0 0; }
+.report-findings { font-size: 13px; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; }
+.report-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.report-status { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #f1f5f9; color: #475569; white-space: nowrap; }
+.report-status--uploaded { background: #d1fae5; color: #065f46; }
+.report-status--reviewed { background: #dbeafe; color: #1e40af; }
+.report-status--ordered { background: #ede9fe; color: #5b21b6; }
+.report-status--pending { background: #fef3c7; color: #92400e; }
+.report-open { font-size: 13px; font-weight: 700; color: #0d9488; text-decoration: none; }
+.report-empty { font-size: 13px; color: #94a3b8; text-align: left; margin: 4px 0 12px; }
+.refer-summary { margin-top: 12px; padding: 12px 14px; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 10px; font-size: 13px; color: #134e4a; display: flex; flex-direction: column; gap: 6px; }
 </style>

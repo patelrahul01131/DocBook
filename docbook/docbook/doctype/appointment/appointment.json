@@ -21,7 +21,15 @@
   "consultation_notes",
   "treatment_plan",
   "follow_up_date",
-  "follow_up_instructions"
+  "follow_up_instructions",
+  "referral_section",
+  "referral",
+  "visit_stage",
+  "queue_token",
+  "priority",
+  "checked_in",
+  "checked_in_at",
+  "called_at"
  ],
  "fields": [
   {
@@ -108,6 +116,51 @@
    "fieldname": "follow_up_instructions",
    "fieldtype": "Small Text",
    "label": "Follow-up Instructions"
+  },
+  {
+   "fieldname": "referral_section",
+   "fieldtype": "Section Break",
+   "label": "Referral & Queue"
+  },
+  {
+   "fieldname": "referral",
+   "fieldtype": "Link",
+   "label": "Referral",
+   "options": "Referral"
+  },
+  {
+   "default": "",
+   "fieldname": "visit_stage",
+   "fieldtype": "Select",
+   "label": "Visit Stage",
+   "options": "\nWaiting\nIn Consultation\nReport Pending\nReady For Review\nCompleted"
+  },
+  {
+   "fieldname": "queue_token",
+   "fieldtype": "Int",
+   "label": "Queue Token"
+  },
+  {
+   "default": "0",
+   "fieldname": "priority",
+   "fieldtype": "Check",
+   "label": "Priority (Return Visit)"
+  },
+  {
+   "default": "0",
+   "fieldname": "checked_in",
+   "fieldtype": "Check",
+   "label": "Checked In"
+  },
+  {
+   "fieldname": "checked_in_at",
+   "fieldtype": "Datetime",
+   "label": "Checked In At"
+  },
+  {
+   "fieldname": "called_at",
+   "fieldtype": "Datetime",
+   "label": "Called At"
   }
  ],
  "grid_page_length": 50,

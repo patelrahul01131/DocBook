@@ -436,6 +436,45 @@ onMounted(() => {
               </div>
             </section>
 
+            <!-- Lab / Diagnostic Reports -->
+            <section v-if="appointment.reports && appointment.reports.length" class="detail-card reports-card">
+              <div class="card-title-row">
+                <div class="icon-circle purple">
+                  <span class="lucide-file-text"></span>
+                </div>
+                <div>
+                  <h3>Reports</h3>
+                  <p>Lab, imaging and diagnostic results for this visit</p>
+                </div>
+              </div>
+              <div v-for="rp in appointment.reports" :key="rp.name" class="report-row">
+                <div class="report-info">
+                  <strong>{{ rp.title }}</strong>
+                  <span class="report-sub">{{ rp.report_type }}
+                    <template v-if="rp.laboratory"> · {{ rp.laboratory }}</template>
+                    <template v-if="rp.external"> · External</template>
+                  </span>
+                  <p v-if="rp.findings" class="report-findings">{{ rp.findings }}</p>
+                </div>
+                <div class="report-side">
+                  <span class="report-status" :class="`report-status--${(rp.status || '').toLowerCase()}`">{{ rp.status }}</span>
+                  <a v-if="rp.report_file" :href="rp.report_file" target="_blank" class="report-open">Open ↗</a>
+                </div>
+              </div>
+            </section>
+
+            <!-- Referral episode banner -->
+            <section v-if="appointment.referral" class="detail-card referral-banner">
+              <div class="card-title-row">
+                <div class="icon-circle purple"><span>🤝</span></div>
+                <div>
+                  <h3>Referral episode · {{ appointment.referral.name }}</h3>
+                  <p>{{ appointment.referral.status }} · {{ appointment.referral.specialty || 'Specialist' }}</p>
+                </div>
+              </div>
+              <p class="referral-reason"><strong>Reason:</strong> {{ appointment.referral.reason }}</p>
+            </section>
+
           </div>
 
           <!-- Right Column -->
@@ -1084,4 +1123,17 @@ onMounted(() => {
   .page-header { flex-direction: column; align-items: flex-start; }
   .header-right { align-items: flex-start; }
 }
+/* Reports + referral (appointment detail) */
+.report-row { display: flex; justify-content: space-between; gap: 14px; align-items: flex-start; padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; margin-bottom: 10px; background: #fafcff; }
+.report-info strong { font-size: 14px; color: #0f172a; display: block; }
+.report-sub { font-size: 12px; color: #64748b; }
+.report-findings { font-size: 13px; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 10px; margin: 8px 0 0; }
+.report-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
+.report-status { font-size: 11px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #f1f5f9; color: #475569; white-space: nowrap; }
+.report-status--uploaded { background: #d1fae5; color: #065f46; }
+.report-status--reviewed { background: #dbeafe; color: #1e40af; }
+.report-status--ordered { background: #ede9fe; color: #5b21b6; }
+.report-status--pending { background: #fef3c7; color: #92400e; }
+.report-open { font-size: 13px; font-weight: 700; color: #0d9488; text-decoration: none; }
+.referral-reason { font-size: 13px; color: #334155; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px; padding: 10px 12px; margin: 0; }
 </style>

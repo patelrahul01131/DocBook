@@ -1,0 +1,170 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "RPT-.#####",
+ "creation": "2026-10-13 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "patient",
+  "appointment",
+  "referral",
+  "ordered_by",
+  "report_type",
+  "title",
+  "column_break_1",
+  "laboratory",
+  "external",
+  "status",
+  "sample_collected_at",
+  "section_break_1",
+  "description",
+  "findings",
+  "section_break_2",
+  "report_file",
+  "uploaded_by",
+  "uploaded_at",
+  "reviewed_by",
+  "reviewed_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "patient",
+   "fieldtype": "Link",
+   "label": "Patient",
+   "options": "Patient Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "appointment",
+   "fieldtype": "Link",
+   "label": "Appointment",
+   "options": "Appointment"
+  },
+  {
+   "fieldname": "referral",
+   "fieldtype": "Link",
+   "label": "Referral",
+   "options": "Referral"
+  },
+  {
+   "fieldname": "ordered_by",
+   "fieldtype": "Link",
+   "label": "Ordered By",
+   "options": "Doctor Profile"
+  },
+  {
+   "default": "Lab",
+   "fieldname": "report_type",
+   "fieldtype": "Select",
+   "label": "Report Type",
+   "options": "Lab\nImaging\nPrescription\nDocument\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "label": "Title",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "laboratory",
+   "fieldtype": "Data",
+   "label": "Laboratory / Provider"
+  },
+  {
+   "default": "0",
+   "fieldname": "external",
+   "fieldtype": "Check",
+   "label": "External (done outside hospital)"
+  },
+  {
+   "default": "Ordered",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Ordered\nPending\nUploaded\nReviewed\nCancelled"
+  },
+  {
+   "fieldname": "sample_collected_at",
+   "fieldtype": "Datetime",
+   "label": "Sample Collected At"
+  },
+  {
+   "fieldname": "section_break_1",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description / Instructions"
+  },
+  {
+   "fieldname": "findings",
+   "fieldtype": "Text Editor",
+   "label": "Findings / Results"
+  },
+  {
+   "fieldname": "section_break_2",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "report_file",
+   "fieldtype": "Attach",
+   "label": "Report File"
+  },
+  {
+   "fieldname": "uploaded_by",
+   "fieldtype": "Data",
+   "label": "Uploaded By"
+  },
+  {
+   "fieldname": "uploaded_at",
+   "fieldtype": "Datetime",
+   "label": "Uploaded At"
+  },
+  {
+   "fieldname": "reviewed_by",
+   "fieldtype": "Link",
+   "label": "Reviewed By",
+   "options": "Doctor Profile"
+  },
+  {
+   "fieldname": "reviewed_at",
+   "fieldtype": "Datetime",
+   "label": "Reviewed At"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-13 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Patient Report",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

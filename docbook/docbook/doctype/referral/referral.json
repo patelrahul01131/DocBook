@@ -1,0 +1,125 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "REF-.#####",
+ "creation": "2026-10-13 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "patient",
+  "referring_doctor",
+  "referred_to_doctor",
+  "specialty",
+  "source_appointment",
+  "target_appointment",
+  "status",
+  "reason",
+  "clinical_notes",
+  "referral_date",
+  "accepted_at",
+  "completed_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "patient",
+   "fieldtype": "Link",
+   "label": "Patient",
+   "options": "Patient Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "referring_doctor",
+   "fieldtype": "Link",
+   "label": "Referring Doctor",
+   "options": "Doctor Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "referred_to_doctor",
+   "fieldtype": "Link",
+   "label": "Referred To Doctor",
+   "options": "Doctor Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "specialty",
+   "fieldtype": "Link",
+   "label": "Specialty",
+   "options": "Specialty"
+  },
+  {
+   "fieldname": "source_appointment",
+   "fieldtype": "Link",
+   "label": "Source Appointment (Referring)",
+   "options": "Appointment",
+   "reqd": 1
+  },
+  {
+   "fieldname": "target_appointment",
+   "fieldtype": "Link",
+   "label": "Target Appointment (Referred)",
+   "options": "Appointment"
+  },
+  {
+   "default": "Pending",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nAccepted\nRejected\nCompleted"
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Small Text",
+   "label": "Reason for Referral",
+   "reqd": 1
+  },
+  {
+   "fieldname": "clinical_notes",
+   "fieldtype": "Text Editor",
+   "label": "Shared Clinical Notes"
+  },
+  {
+   "fieldname": "referral_date",
+   "fieldtype": "Datetime",
+   "label": "Referral Date"
+  },
+  {
+   "fieldname": "accepted_at",
+   "fieldtype": "Datetime",
+   "label": "Accepted At"
+  },
+  {
+   "fieldname": "completed_at",
+   "fieldtype": "Datetime",
+   "label": "Completed At"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-13 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "DocBook",
+ "name": "Referral",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

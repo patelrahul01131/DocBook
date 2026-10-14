@@ -85,6 +85,9 @@ app_license = "mit"
 # before_install = "docbook.install.before_install"
 # after_install = "docbook.install.after_install"
 
+# Runs after every `bench migrate` — idempotent setup (roles, etc.)
+after_migrate = "docbook.setup.create_custom_roles"
+
 # Uninstallation
 # ------------
 

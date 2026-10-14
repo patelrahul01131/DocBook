@@ -48,6 +48,8 @@ const isLoggedIn = computed(() => Boolean(auth.isLoggedIn && auth.user));
 
 const isDoctor = computed(() => userRoles.value.includes("doctor"));
 const isPatient = computed(() => userRoles.value.includes("patient"));
+const isReceptionist = computed(() => userRoles.value.includes("receptionist"));
+const isLaboratory = computed(() => userRoles.value.includes("laboratory"));
 const isAdmin = computed(
   () =>
     userRoles.value.includes("system manager") ||
@@ -56,6 +58,8 @@ const isAdmin = computed(
 
 const portalSubtitle = computed(() => {
   if (isAdmin.value) return "Admin Portal";
+  if (isReceptionist.value) return "Receptionist Portal";
+  if (isLaboratory.value) return "Laboratory Portal";
   if (isDoctor.value) return "Doctor Portal";
   if (isPatient.value) return "Patient Portal";
   return "DocBook Health";
@@ -106,6 +110,12 @@ const allSidebarItems = [
     path: "/medicines",
     roles: ["patient", "doctor", "guest"],
   },
+  {
+    label: "My Reports",
+    icon: "lucide-clipboard-list",
+    path: "/reports",
+    roles: ["patient"],
+  },
 
   // Doctor Portal
   {
@@ -125,6 +135,28 @@ const allSidebarItems = [
     icon: "lucide-users",
     path: "/doctor-patients",
     roles: ["doctor"],
+  },
+  {
+    label: "Referrals",
+    icon: "lucide-users",
+    path: "/referrals",
+    roles: ["doctor"],
+  },
+
+  // Receptionist Portal
+  {
+    label: "Queue Management",
+    icon: "lucide-calendar-check",
+    path: "/receptionist",
+    roles: ["receptionist"],
+  },
+
+  // Laboratory Portal
+  {
+    label: "Lab Worklist",
+    icon: "lucide-pill",
+    path: "/laboratory",
+    roles: ["laboratory"],
   },
 ];
 

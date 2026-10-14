@@ -52,7 +52,9 @@ async function submitForm() {
         await router.push('/doctor')
       } else if (profile.role === 'Patient') {
         await router.push('/home')
-      } else {
+      } else if (profile.role === 'Receptionist') {
+        await router.push('/receptionist')
+      }else {
         await router.push('/')
       }
     }
