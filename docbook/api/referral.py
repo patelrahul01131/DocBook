@@ -300,3 +300,49 @@ def complete_referral(referral):
 	return {"success": True, "status": "Completed"}
 
 
+@frappe.whitelist()
+def update_referral(referral, reason=None, clinical_notes=None):
+	"""Doctor or admin updates an existing referral."""
+	ref = _referral_or_throw(referral)
+	doctor = _current_doctor()
+	if not _is_admin() and doctor != ref.referring_doctor:
+		frappe.throw(_("Only the referring doctor can modify this referral"), frappe.PermissionError)
+
+	updates = {}
+	if reason is not None:
+		if not str(reason).strip():
+			frappe.throw(_("Reason cannot be empty"))
+		updates["reason"] = str(reason).strip()
+	if clinical_notes is not None:
+		updates["clinical_notes"] = str(clinical_notes).strip()
+
+	if updates:
+		frappe.db.set_value("Referral", referral, updates)
+		frappe.db.commit()
+
+	return {"success": True, "referral": referral}
+
+
+@frappe.whitelist()
+def cancel_referral(referral):
+	"""Doctor or admin cancels or deletes a referral and unlinks appointments."""
+	ref = _referral_or_throw(referral)
+	doctor = _current_doctor()
+	if not _is_admin() and doctor != ref.referring_doctor:
+		frappe.throw(_("Only the referring doctor can cancel this referral"), frappe.PermissionError)
+
+	# Unlink source appointment
+	if ref.source_appointment and frappe.db.exists("Appointment", ref.source_appointment):
+		frappe.db.set_value("Appointment", ref.source_appointment, "referral", None)
+
+	# If target appointment is still pending, cancel or delete it
+	if ref.target_appointment and frappe.db.exists("Appointment", ref.target_appointment):
+		target_status = frappe.db.get_value("Appointment", ref.target_appointment, "status")
+		if target_status in ("Pending", "Confirmed"):
+			frappe.db.set_value("Appointment", ref.target_appointment, "status", "Cancelled")
+
+	frappe.delete_doc("Referral", referral, ignore_permissions=True)
+	frappe.db.commit()
+	return {"success": True, "referral": referral}
+
+

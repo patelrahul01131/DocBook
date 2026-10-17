@@ -1,6 +1,6 @@
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { Badge, Button } from 'frappe-ui'
 import { useRouter } from 'vue-router'
 import { call } from '../../api'
@@ -17,6 +17,10 @@ const searchQuery = ref('')
 const loading = ref(true)
 const refreshing = ref(false)
 const error = ref('')
+
+// Live queue / check-in status for today's appointment
+const queueStatus = ref(null)
+let queuePoll = null
 
 // --------------------------------------------------
 // Authenticated patient
@@ -76,17 +80,8 @@ async function fetchDashboard(isRefresh = false) {
         appointmentResult?.message ||
         []
 
-    // Display only records belonging to the signed-in patient.
-    // The server must independently enforce this restriction.
-    appointments.value = appointmentRows.filter((appointment) => {
-      const owner = String(
-        appointment.patient_email ||
-        appointment.patient ||
-        ''
-      ).trim().toLowerCase()
-
-      return owner && owner === patientEmail.value
-    })
+    // Display records belonging to the signed-in patient as returned by the backend
+    appointments.value = appointmentRows
 
     doctors.value = Array.isArray(doctorResult)
       ? doctorResult
@@ -235,30 +230,41 @@ const completedAppointments = computed(() =>
 // Chart / Analytics
 // --------------------------------------------------
 const activityChartData = computed(() => {
-  const days = chartPeriod.value
+  const period = Number(chartPeriod.value) || 14
   const list = []
   const today = new Date()
 
-  for (let i = days - 1; i >= 0; i--) {
+  // Window covering past days, today, and upcoming schedule
+  const pastDays = Math.floor(period / 2)
+  const totalDays = period
+
+  for (let i = pastDays; i > (pastDays - totalDays); i--) {
     const d = new Date()
     d.setDate(today.getDate() - i)
     const yyyy = d.getFullYear()
     const mm = String(d.getMonth() + 1).padStart(2, '0')
     const dd = String(d.getDate()).padStart(2, '0')
     const dateStr = `${yyyy}-${mm}-${dd}`
-    const dayLabel = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
-    const weekday = d.toLocaleDateString('en-IN', { weekday: 'narrow' })
+    const dayNum = String(d.getDate())
+    const monthShort = d.toLocaleDateString('en-IN', { month: 'short' })
+    const dayLabel = `${dayNum} ${monthShort}`
+    const fullDateLabel = d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 
-    const dayAppts = appointments.value.filter(a => a.appointment_date === dateStr)
+    const dayAppts = appointments.value.filter(a => {
+      const aDate = a.appointment_date || a.date
+      return aDate === dateStr
+    })
     const completed = dayAppts.filter(a => isCompleted(a)).length
     const upcoming = dayAppts.filter(a => isUpcoming(a)).length
     const cancelled = dayAppts.filter(a => isCancelled(a)).length
-    const pending = dayAppts.filter(a => ['pending', 'booked'].includes(statusOf(a))).length
+    const pending = dayAppts.filter(a => ['pending', 'booked', 'confirmed'].includes(statusOf(a))).length
 
     list.push({
       date: dateStr,
+      dayNum,
+      monthShort,
       dayLabel,
-      weekday,
+      fullDateLabel,
       total: dayAppts.length,
       completed,
       upcoming,
@@ -270,9 +276,10 @@ const activityChartData = computed(() => {
   const maxTotal = Math.max(...list.map(i => i.total), 3)
   return list.map(item => ({
     ...item,
-    heightPct: Math.max(Math.round((item.total / maxTotal) * 100), 4),
+    heightPct: Math.max(Math.round((item.total / maxTotal) * 100), item.total > 0 ? 20 : 6),
   }))
 })
+
 
 const totalPeriodAppts = computed(() =>
   activityChartData.value.reduce((acc, curr) => acc + curr.total, 0)
@@ -317,6 +324,15 @@ function findDoctors() {
   router.push('/home')
 }
 
+async function fetchQueueStatus() {
+  try {
+    const res = await call('docbook.api.queue.get_my_queue_position', {})
+    queueStatus.value = res && res.found ? res : null
+  } catch (err) {
+    queueStatus.value = null
+  }
+}
+
 function viewAppointments(slot_name) {
   if (slot_name && typeof slot_name === 'string') {
     router.push(`/show-appointment/${slot_name}`)
@@ -327,6 +343,13 @@ function viewAppointments(slot_name) {
 
 onMounted(() => {
   fetchDashboard()
+  fetchQueueStatus()
+  // Keep wait-time / check-in info fresh while the patient waits.
+  queuePoll = setInterval(fetchQueueStatus, 30000)
+})
+
+onUnmounted(() => {
+  if (queuePoll) clearInterval(queuePoll)
 })
 </script>
 
@@ -445,6 +468,59 @@ onMounted(() => {
           </article>
         </section>
 
+        <!-- Live Queue Status -->
+        <section v-if="queueStatus && queueStatus.found" class="section-block queue-section">
+          <div class="section-heading">
+            <div>
+              <div class="eyebrow">LIVE QUEUE</div>
+              <h2>Today's Check-in &amp; Wait Time</h2>
+              <p>Updates automatically while you wait for your turn.</p>
+            </div>
+          </div>
+
+          <div class="queue-grid">
+            <article class="queue-card">
+              <span class="queue-label">Check-in</span>
+              <strong class="queue-value" :class="{ ok: queueStatus.checked_in }">
+                {{ queueStatus.checked_in ? '✅ Checked In' : 'Not checked in yet' }}
+              </strong>
+              <span class="queue-hint">Show your QR pass at reception to check in.</span>
+            </article>
+
+            <article v-if="queueStatus.queue_token" class="queue-card">
+              <span class="queue-label">Token</span>
+              <strong class="queue-value">#{{ queueStatus.queue_token }}</strong>
+              <span class="queue-hint">Your queue token for today</span>
+            </article>
+
+            <article v-if="queueStatus.queue_position" class="queue-card">
+              <span class="queue-label">Position in queue</span>
+              <strong class="queue-value">{{ queueStatus.queue_position }}</strong>
+              <span v-if="queueStatus.patients_ahead != null" class="queue-hint">
+                {{ queueStatus.patients_ahead }} patient{{ queueStatus.patients_ahead === 1 ? '' : 's' }} ahead of you
+              </span>
+            </article>
+
+            <article v-if="queueStatus.estimated_wait_minutes != null" class="queue-card">
+              <span class="queue-label">Estimated wait</span>
+              <strong class="queue-value">~{{ queueStatus.estimated_wait_minutes }} min</strong>
+              <span class="queue-hint">Based on today's consultation pace</span>
+            </article>
+
+            <article v-if="queueStatus.average_wait_minutes" class="queue-card">
+              <span class="queue-label">Average wait today</span>
+              <strong class="queue-value">{{ queueStatus.average_wait_minutes }} min</strong>
+              <span class="queue-hint">Average wait for this doctor today</span>
+            </article>
+
+            <article v-if="queueStatus.visit_stage" class="queue-card">
+              <span class="queue-label">Stage</span>
+              <strong class="queue-value">{{ queueStatus.visit_stage }}</strong>
+              <span v-if="queueStatus.urgency_score" class="queue-hint">Urgency score: {{ queueStatus.urgency_score }}/100</span>
+            </article>
+          </div>
+        </section>
+
         <!-- Activity Chart Section -->
         <section class="section-block chart-section">
           <div class="section-heading">
@@ -515,7 +591,10 @@ onMounted(() => {
                     }"
                   ></div>
                 </div>
-                <div class="bar-label">{{ bar.weekday }}</div>
+                <div class="bar-label">
+                  <span class="bar-date-num">{{ bar.dayNum }}</span>
+                  <span class="bar-date-mon">{{ bar.monthShort }}</span>
+                </div>
               </div>
             </div>
 
@@ -1603,10 +1682,31 @@ onMounted(() => {
 }
 
 .bar-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   font-size: 10px;
-  color: #94a3b8;
+  color: #64748b;
   font-weight: 600;
   text-align: center;
+  min-height: 28px;
+}
+
+.bar-date-num {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e293b;
+  line-height: 1.1;
+}
+
+.bar-date-mon {
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #94a3b8;
+  letter-spacing: 0.5px;
+  line-height: 1.1;
 }
 
 .chart-legend {
@@ -1633,5 +1733,45 @@ onMounted(() => {
   .bar-chart-wrap {
     gap: 2px;
   }
+}
+
+/* Live queue status */
+.queue-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.queue-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.queue-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.queue-value {
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.queue-value.ok {
+  color: #047857;
+}
+
+.queue-hint {
+  font-size: 12px;
+  color: #94a3b8;
 }
 </style>

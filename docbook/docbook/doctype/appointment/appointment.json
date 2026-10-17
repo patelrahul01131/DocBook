@@ -24,6 +24,10 @@
   "follow_up_instructions",
   "referral_section",
   "referral",
+  "referral_type",
+  "fast_track",
+  "ai_priority",
+  "qr_code",
   "visit_stage",
   "queue_token",
   "priority",
@@ -129,6 +133,29 @@
    "options": "Referral"
   },
   {
+   "fieldname": "referral_type",
+   "fieldtype": "Select",
+   "label": "Referral Type",
+   "options": "Regular Checkup\nReferral\nFast Track Referral"
+  },
+  {
+   "default": "0",
+   "fieldname": "fast_track",
+   "fieldtype": "Check",
+   "label": "Fast Track (Skip Queue)"
+  },
+  {
+   "fieldname": "ai_priority",
+   "fieldtype": "Select",
+   "label": "AI Priority Level",
+   "options": "Low\nMedium\nHigh\nCritical"
+  },
+  {
+   "fieldname": "qr_code",
+   "fieldtype": "Attach Image",
+   "label": "QR Code"
+  },
+  {
    "default": "",
    "fieldname": "visit_stage",
    "fieldtype": "Select",
@@ -184,6 +211,54 @@
    "role": "System Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "role": "Receptionist",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "print": 1,
+   "email": 1,
+   "export": 0,
+   "share": 0,
+   "import": 0,
+   "set_user_permissions": 0
+  },
+  {
+   "role": "Doctor",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "print": 1,
+   "email": 1,
+   "export": 0,
+   "share": 0,
+   "import": 0,
+   "set_user_permissions": 0
+  },
+  {
+   "role": "Patient",
+   "read": 1,
+   "write": 0,
+   "create": 0,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "print": 1,
+   "email": 1,
+   "export": 0,
+   "share": 0,
+   "import": 0,
+   "set_user_permissions": 0
   }
  ],
  "row_format": "Dynamic",

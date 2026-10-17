@@ -125,6 +125,12 @@ const allSidebarItems = [
     roles: ["doctor"],
   },
   {
+    label: "Live Patient Queue",
+    icon: "lucide-stethoscope",
+    path: "/doctor/queue",
+    roles: ["doctor"],
+  },
+  {
     label: "Doctor Appointments",
     icon: "lucide-calendar-check",
     path: "/doctor-appointments",
@@ -145,9 +151,21 @@ const allSidebarItems = [
 
   // Receptionist Portal
   {
-    label: "Queue Management",
-    icon: "lucide-calendar-check",
+    label: "Today's Patients",
+    icon: "lucide-calendar-days",
     path: "/receptionist",
+    roles: ["receptionist"],
+  },
+  {
+    label: "Patient Records",
+    icon: "lucide-users",
+    path: "/receptionist/patients",
+    roles: ["receptionist"],
+  },
+  {
+    label: "Check-in Kiosk",
+    icon: "lucide-qr-code",
+    path: "/receptionist/checkin",
     roles: ["receptionist"],
   },
 
@@ -185,6 +203,10 @@ const iconPaths = {
     '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/>',
   "lucide-calendar-check":
     '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
+  "lucide-calendar-days":
+    '<path d="M8 2v4"/><path d="M16 2v4"/><rect width="18" height="18" x="3" y="4" rx="2"/><path d="M3 10h18"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/><path d="M16 18h.01"/>',
+  "lucide-qr-code":
+    '<rect width="5" height="5" x="3" y="3" rx="1"/><rect width="5" height="5" x="16" y="3" rx="1"/><rect width="5" height="5" x="3" y="16" rx="1"/><path d="M21 16h-3a2 2 0 0 0-2 2v3"/><path d="M21 21v.01"/><path d="M12 7v3a2 2 0 0 1-2 2H7"/><path d="M3 12h.01"/><path d="M12 3h.01"/><path d="M12 16v.01"/><path d="M16 12h1"/><path d="M21 12v.01"/><path d="M12 21v-1"/>',
   "lucide-clipboard-list":
     '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
   "lucide-pill":

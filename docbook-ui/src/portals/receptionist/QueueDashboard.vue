@@ -4,24 +4,48 @@ import { call, uploadFile } from '../../api'
 
 const doctors = ref([])
 const selectedDoctor = ref('')
+const viewMode = ref('single')
 const queueData = ref({ now_serving: null, queue: [], other: [], waiting_count: 0 })
 const loading = ref(true)
 const error = ref(null)
 const busy = ref(false)
 
-// Queue date — defaults to today, receptionist can move day to day.
 const todayStr = new Date().toISOString().slice(0, 10)
 const selectedDate = ref(todayStr)
 const isToday = computed(() => selectedDate.value === todayStr)
 
-// External report upload (front desk)
+const dashboardStats = ref({
+  total_appointments: 0, checked_in: 0, waiting: 0, in_consultation: 0,
+  completed: 0, cancelled: 0, avg_waiting_time_minutes: 0,
+  per_doctor: [], appointments: [],
+})
+
+// Per-doctor wait times + urgency scores (dynamic queue overview)
+const waitOverview = ref([])
+
+const searchQuery = ref('')
+const searchPhone = ref('')
+const searchToken = ref('')
+const searchResults = ref([])
+const searchLoading = ref(false)
+
+const showPatientDetails = ref(false)
+const selectedPatient = ref(null)
+const patientHistory = ref([])
+const patientLoading = ref(false)
+
+const showQRUpload = ref(false)
+const qrData = ref('')
+const qrBusy = ref(false)
+const qrAppointmentId = ref(null)
+const qrError = ref(null)
+
 const showUpload = ref(false)
 const uploading = ref(false)
 const uploadError = ref(null)
 const form = ref({ appointment: '', report_type: 'Lab', title: '', laboratory: '', findings: '', file: null })
 const uploadAppointments = ref([])
 
-// Walk-in booking (patient arrives with no appointment)
 const showWalkin = ref(false)
 const walkinBusy = ref(false)
 const walkinError = ref(null)
@@ -35,7 +59,6 @@ const walkinSlots = ref([])
 const slotsLoading = ref(false)
 const lookupState = ref(null)
 
-// Reschedule (early / late / different-day arrivals)
 const showResched = ref(false)
 const reschedBusy = ref(false)
 const reschedError = ref(null)
@@ -46,66 +69,6 @@ const reschedSlotsLoading = ref(false)
 
 function today() {
   return new Date().toISOString().slice(0, 10)
-}
-
-async function loadDoctors() {
-  try {
-    const res = await call('docbook.api.queue.get_queue')
-    const rows = [...(res.queue || []), ...(res.other || [])]
-    const seen = new Map()
-    for (const r of rows) {
-      if (r.doctor && !seen.has(r.doctor)) seen.set(r.doctor, r.doctor_name || r.doctor)
-    }
-    doctors.value = [...seen.entries()].map(([value, label]) => ({ value, label }))
-    if (!selectedDoctor.value && doctors.value.length) {
-      selectedDoctor.value = doctors.value[0].value
-    }
-    if (!walkinForm.value.doctor && selectedDoctor.value) {
-      walkinForm.value.doctor = selectedDoctor.value
-    }
-  } catch (e) {
-    error.value = e.message || 'Unable to load doctors.'
-  }
-}
-
-async function loadQueue() {
-  if (!selectedDoctor.value) {
-    queueData.value = { now_serving: null, queue: [], other: [], waiting_count: 0 }
-    loading.value = false
-    return
-  }
-  loading.value = true
-  error.value = null
-  try {
-    const res = await call('docbook.api.queue.get_queue', { doctor: selectedDoctor.value, date: selectedDate.value })
-    queueData.value = {
-      now_serving: res.now_serving || null,
-      queue: res.queue || [],
-      other: res.other || [],
-      waiting_count: res.waiting_count || 0,
-      date: res.date,
-    }
-  } catch (e) {
-    error.value = e.message || 'Unable to load the queue.'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function onDoctorChange() {
-  await loadQueue()
-}
-
-function shiftDay(delta) {
-  const d = new Date(selectedDate.value + 'T12:00:00')
-  d.setDate(d.getDate() + delta)
-  selectedDate.value = d.toISOString().slice(0, 10)
-  loadQueue()
-}
-
-function goToday() {
-  selectedDate.value = today()
-  loadQueue()
 }
 
 async function checkIn(appt) {
@@ -341,6 +304,21 @@ function stageClass(stage) {
   return `q-stage q-stage--${s}`
 }
 
+function urgencyClass(score) {
+  if (score >= 70) return 'q-urgency q-urgency--high'
+  if (score >= 40) return 'q-urgency q-urgency--med'
+  return 'q-urgency q-urgency--low'
+}
+
+async function loadWaitOverview() {
+  try {
+    const res = await call('docbook.api.queue.get_queue_wait_overview', { date: selectedDate.value })
+    waitOverview.value = Array.isArray(res?.doctors) ? res.doctors : []
+  } catch {
+    waitOverview.value = []
+  }
+}
+
 const waitingList = computed(() => queueData.value.queue || [])
 const notCheckedIn = computed(() =>
   (queueData.value.other || []).filter((a) => !a.checked_in && a.status !== 'Cancelled')
@@ -349,7 +327,151 @@ const notCheckedIn = computed(() =>
 onMounted(async () => {
   await loadDoctors()
   await loadQueue()
+  await loadDashboard()
 })
+
+async function loadDashboard() {
+  loading.value = true
+  error.value = null
+  try {
+    const res = await call('docbook.api.queue.get_receptionist_dashboard', { date: selectedDate.value })
+    dashboardStats.value = {
+      total_appointments: res.total_appointments || 0,
+      checked_in: res.checked_in || 0,
+      waiting: res.waiting || 0,
+      in_consultation: res.in_consultation || 0,
+      completed: res.completed || 0,
+      cancelled: res.cancelled || 0,
+      avg_waiting_time_minutes: res.avg_waiting_time_minutes || 0,
+      per_doctor: res.per_doctor || [],
+      appointments: res.appointments || [],
+    }
+    loadWaitOverview()
+  } catch (e) {
+    error.value = e.message || 'Unable to load dashboard.'
+  } finally {
+    loading.value = false
+  }
+}
+
+async function searchPatients() {
+  searchLoading.value = true
+  try {
+    const res = await call('docbook.api.queue.search_patients', {
+      query: searchQuery.value || null,
+      phone: searchPhone.value || null,
+      token: searchToken.value || null,
+      doctor: selectedDoctor.value || null,
+      date: selectedDate.value,
+    })
+    searchResults.value = res.results || []
+  } catch (e) {
+    error.value = e.message || 'Search failed.'
+  } finally {
+    searchLoading.value = false
+  }
+}
+
+function clearSearch() {
+  searchQuery.value = ''
+  searchPhone.value = ''
+  searchToken.value = ''
+  searchResults.value = []
+}
+
+async function openPatientDetails(patient) {
+  selectedPatient.value = patient
+  patientLoading.value = true
+  try {
+    const key = patient.name || patient.patient || patient
+    const res = await call('docbook.api.queue.get_patient_appointment_history', { patient: key })
+    patientHistory.value = res.appointments || []
+    showPatientDetails.value = true
+  } catch (e) {
+    error.value = e.message || 'Unable to load patient history.'
+  } finally {
+    patientLoading.value = false
+  }
+}
+
+function closePatientDetails() {
+  showPatientDetails.value = false
+  selectedPatient.value = null
+  patientHistory.value = []
+}
+
+async function revertCheckIn(appointment) {
+  if (!confirm('Revert check-in for this patient? They will be removed from the active queue.')) return
+  busy.value = true
+  try {
+    await call('docbook.api.queue.revert_check_in', { appointment })
+    await loadQueue()
+    await loadDashboard()
+  } catch (e) {
+    error.value = e.message || 'Unable to revert check-in.'
+    throw e
+  } finally {
+    busy.value = false
+  }
+}
+
+async function stopConsultation(appointment) {
+  if (!confirm('Stop consultation and return patient to Waiting?')) return
+  busy.value = true
+  try {
+    await call('docbook.api.queue.stop_consultation', { appointment })
+    await loadQueue()
+    await loadDashboard()
+  } catch (e) {
+    error.value = e.message || 'Unable to stop consultation.'
+    throw e
+  } finally {
+    busy.value = false
+  }
+}
+
+async function reorderQueue(appointment, newPosition) {
+  busy.value = true
+  try {
+    await call('docbook.api.queue.reorder_queue', {
+      appointment, new_position: newPosition,
+      doctor: selectedDoctor.value, date: selectedDate.value,
+    })
+    await loadQueue()
+    await loadDashboard()
+  } catch (e) {
+    error.value = e.message || 'Unable to reorder queue.'
+    throw e
+  } finally {
+    busy.value = false
+  }
+}
+
+async function joinQueueFromQR() {
+  if (!qrData.value.trim() && !qrAppointmentId.value) {
+    qrError.value = 'Please scan or paste QR code data or select an appointment.'
+    return
+  }
+  qrBusy.value = true
+  qrError.value = null
+  try {
+    await call('docbook.api.queue.join_queue_from_qr', {
+      qr_data: qrData.value.trim() || null,
+      appointment_id: qrAppointmentId.value || null,
+      doctor: selectedDoctor.value || null,
+      date: selectedDate.value,
+    })
+    await loadQueue()
+    await loadDashboard()
+    showQRUpload.value = false
+    qrData.value = ''
+    qrAppointmentId.value = null
+  } catch (e) {
+    qrError.value = e.message || 'QR queue join failed.'
+  } finally {
+    qrBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -365,7 +487,7 @@ onMounted(async () => {
         <div class="q-head-actions">
           <div class="q-date-nav">
             <button class="db-btn" @click="shiftDay(-1)" title="Previous day">‹</button>
-            <input type="date" v-model="selectedDate" class="q-select q-date" @change="loadQueue" />
+            <input type="date" v-model="selectedDate" class="q-select q-date" @change="loadQueue; loadDashboard" />
             <button class="db-btn" @click="shiftDay(1)" title="Next day">›</button>
             <button v-if="!isToday" class="db-btn" @click="goToday">Today</button>
           </div>
@@ -375,8 +497,91 @@ onMounted(async () => {
           </select>
           <button class="db-btn db-btn--secondary" :disabled="!selectedDoctor" @click="openWalkin(selectedDoctor)">+ Walk-in</button>
           <button class="db-btn db-btn--primary" :disabled="busy || !selectedDoctor || !isToday" @click="callNext" title="Call next works on today's live queue">🔔 Call Next</button>
+          <button class="db-btn db-btn--secondary" @click="showQRUpload = true">📷 QR Upload</button>
         </div>
       </header>
+
+      <!-- Dashboard stats -->
+      <div class="q-dashboard" v-if="!loading">
+        <div class="q-stat">
+          <div class="q-stat-val">{{ dashboardStats.total_appointments }}</div>
+          <div class="q-stat-label">Total Appointments</div>
+        </div>
+        <div class="q-stat">
+          <div class="q-stat-val">{{ dashboardStats.checked_in }}</div>
+          <div class="q-stat-label">Checked In</div>
+        </div>
+        <div class="q-stat">
+          <div class="q-stat-val">{{ dashboardStats.waiting }}</div>
+          <div class="q-stat-label">Waiting</div>
+        </div>
+        <div class="q-stat">
+          <div class="q-stat-val">{{ dashboardStats.in_consultation }}</div>
+          <div class="q-stat-label">In Consultation</div>
+        </div>
+        <div class="q-stat">
+          <div class="q-stat-val">{{ dashboardStats.avg_waiting_time_minutes }} min</div>
+          <div class="q-stat-label">Avg Waiting Time</div>
+        </div>
+        <div class="q-stat">
+          <div class="q-stat-val">{{ dashboardStats.completed }}</div>
+          <div class="q-stat-label">Completed</div>
+        </div>
+      </div>
+
+      <!-- Per-doctor wait & urgency -->
+      <section v-if="waitOverview.length" class="q-section">
+        <h2 class="q-section-title">Per-doctor wait &amp; urgency</h2>
+        <div class="q-doctor-grid">
+          <div v-for="d in waitOverview" :key="d.doctor" class="db-card q-doctor-card">
+            <div class="q-doctor-head">
+              <p class="q-name">Dr. {{ d.doctor_name || d.doctor }}</p>
+              <span class="q-wait-chip">{{ d.waiting_count }} waiting</span>
+            </div>
+            <div class="q-doctor-meta">
+              <span>Avg wait today: <strong>{{ d.avg_wait_minutes }} min</strong></span>
+              <span>Avg consult: <strong>{{ d.avg_service_minutes }} min</strong></span>
+            </div>
+            <div v-if="d.now_serving" class="q-doctor-now">
+              Now serving: <strong>#{{ d.now_serving.queue_token || '—' }} {{ d.now_serving.patient_name || d.now_serving.patient }}</strong>
+            </div>
+            <div v-if="d.queue && d.queue.length" class="q-mini-list">
+              <div v-for="r in d.queue" :key="r.name" class="q-mini-row">
+                <span class="q-pos">{{ r.queue_position }}</span>
+                <span class="q-token">#{{ r.queue_token || '—' }}</span>
+                <span class="q-mini-name">{{ r.patient_name || r.patient }}</span>
+                <span :class="urgencyClass(r.urgency_score)" :title="'Urgency score ' + r.urgency_score + '/100'">{{ r.urgency_score }}</span>
+                <span class="q-eta">~{{ r.estimated_wait_minutes ?? '—' }} min</span>
+              </div>
+            </div>
+            <p v-else class="q-sub">No active queue for this doctor.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Patient search / filter -->
+      <div class="q-search-bar">
+        <input type="text" v-model="searchQuery" class="q-input" placeholder="Search patient by name…" @change="searchPatients" />
+        <input type="text" v-model="searchPhone" class="q-input" placeholder="Phone…" @change="searchPatients" />
+        <input type="text" v-model="searchToken" class="q-input" placeholder="Token #…" @change="searchPatients" />
+        <button class="db-btn db-btn--secondary" @click="searchPatients">Search</button>
+        <button class="db-btn db-btn--ghost" @click="clearSearch">Clear</button>
+        <div v-if="searchLoading" class="q-loader">⟳</div>
+        <div v-if="searchResults.length > 0" class="q-search-results">
+          <h3>Search Results ({{ searchResults.count || searchResults.length }})</h3>
+          <div v-for="r in searchResults" :key="r.name" class="db-card q-row">
+            <div class="q-info">
+              <p class="q-name">{{ r.patient_name || r.patient }}</p>
+              <p class="q-sub">{{ r.doctor_name || r.doctor }} · {{ r.appointment_time }} · #{{ r.queue_token || '—' }}</p>
+            </div>
+            <span :class="stageClass(r.visit_stage)">{{ r.visit_stage }}</span>
+            <div class="q-actions">
+              <button class="db-btn db-btn--secondary" @click="openPatientDetails(r)">Details</button>
+              <button class="db-btn db-btn--primary" :disabled="busy" @click="checkIn(r)">Check In</button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div v-if="error" class="db-error-panel">
         <span>⚠️</span><span>{{ error }}</span>
@@ -418,6 +623,8 @@ onMounted(async () => {
               <div class="q-actions">
                 <button class="db-btn db-btn--secondary" @click="openUpload(a)">⬆ Report</button>
                 <button class="db-btn db-btn--secondary" @click="openReschedule(a)">Reschedule</button>
+                <button v-if="a.checked_in && a.visit_stage === 'In Consultation'" class="db-btn db-btn--secondary" @click="stopConsultation(a.name)">⏹ Stop</button>
+                <button v-if="a.checked_in && a.visit_stage !== 'In Consultation'" class="db-btn db-btn--secondary" @click="revertCheckIn(a.name)">↩ Revert</button>
                 <button class="db-btn db-btn--ghost" @click="completeVisit(a)">✓ Done</button>
               </div>
             </div>
@@ -551,6 +758,66 @@ onMounted(async () => {
         </div>
       </div>
 
+      <!-- QR Upload modal -->
+      <div v-if="showQRUpload" class="q-overlay" @click.self="showQRUpload = false">
+        <div class="q-modal q-modal--wide">
+          <div class="q-modal-head">
+            <h3>Scan / Upload QR Code</h3>
+            <button class="q-close" @click="showQRUpload = false">✕</button>
+          </div>
+          <div class="q-modal-body">
+            <div v-if="qrError" class="q-error">{{ qrError }}</div>
+            <div class="q-label">Paste QR data or Appointment ID</div>
+            <textarea v-model="qrData" class="q-input" rows="3" placeholder="DOCBOOK|APT|APT-00001|Patient Name|Dr. Smith|2026-10-16|10:00"></textarea>
+            <div class="q-label">Or select appointment</div>
+            <select v-model="qrAppointmentId" class="q-input">
+              <option value="">Choose appointment</option>
+              <option v-for="a in queueData.queue" :key="a.name" :value="a.name">{{ a.name }} - {{ a.patient_name || a.patient }}</option>
+            </select>
+          </div>
+          <div class="q-modal-foot">
+            <button class="db-btn db-btn--secondary" @click="showQRUpload = false">Cancel</button>
+            <button class="db-btn db-btn--primary" :disabled="qrBusy" @click="joinQueueFromQR">{{ qrBusy ? 'Joining…' : 'Join Queue' }}</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Patient Details / History modal -->
+      <div v-if="showPatientDetails" class="q-overlay" @click.self="closePatientDetails">
+        <div class="q-modal q-modal--wide">
+          <div class="q-modal-head">
+            <h3>{{ selectedPatient?.patient_name || selectedPatient?.patient }} - History</h3>
+            <button class="q-close" @click="closePatientDetails">✕</button>
+          </div>
+          <div class="q-modal-body">
+            <div v-if="patientLoading" class="q-loader">Loading…</div>
+            <div v-else-if="patientHistory.length === 0" class="q-search-results">
+              <p>No appointment history found.</p>
+            </div>
+            <div v-else>
+              <div class="q-label">Patient Details</div>
+              <div class="db-card q-row">
+                <div class="q-info">
+                  <p class="q-name">{{ selectedPatient?.patient_name || selectedPatient?.patient }}</p>
+                  <p class="q-sub">Doctor: {{ selectedPatient?.doctor_name || selectedPatient?.doctor }}</p>
+                </div>
+              </div>
+              <div class="q-label">Appointment History</div>
+              <div v-for="h in patientHistory" :key="h.name" class="db-card q-row">
+                <div class="q-info">
+                  <p class="q-name">{{ h.doctor_name || h.doctor }}</p>
+                  <p class="q-sub">{{ h.appointment_date }} · {{ h.appointment_time }} · {{ h.status }} · {{ h.visit_stage || '—' }}</p>
+                  <p class="q-sub" v-if="h.queue_token">Token: #{{ h.queue_token }} · {{ h.referral_type || 'Regular' }} · {{ h.ai_priority || '—' }}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="q-modal-foot">
+            <button class="db-btn db-btn--secondary" :disabled="patientLoading" @click="closePatientDetails">Close</button>
+          </div>
+        </div>
+      </div>
+
       <!-- Reschedule modal -->
       <div v-if="showResched" class="q-overlay" @click.self="showResched = false">
         <div class="q-modal">
@@ -638,6 +905,37 @@ onMounted(async () => {
 .q-lookup-new { color: #92400e; }
 .q-date-nav { display: flex; align-items: center; gap: 6px; }
 .q-date { min-width: 150px; }
+
+.q-dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 24px; }
+.q-stat { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; text-align: center; box-shadow: 0 4px 12px rgba(15,23,42,0.04); }
+.q-stat-val { font-size: 28px; font-weight: 900; color: #0f172a; margin-bottom: 4px; }
+.q-stat-label { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+
+.q-search-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; padding: 16px; background: #f8fafc; border-radius: 12px; border: 1px solid #e2e8f0; }
+.q-search-results { margin-top: 16px; }
+.q-search-results h3 { margin: 0 0 12px; font-size: 14px; font-weight: 800; color: #0f172a; }
+
+.q-loader { font-size: 12px; color: #0d9488; font-weight: 700; animation: q-spin 1s linear infinite; }
+@keyframes q-spin { to { transform: rotate(360deg); } }
+
+.q-modal--wide { max-width: 700px; }
+
+/* Per-doctor wait & urgency */
+.q-doctor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.q-doctor-card { display: flex; flex-direction: column; gap: 8px; }
+.q-doctor-head { display: flex; justify-content: space-between; align-items: center; }
+.q-wait-chip { font-size: 11px; font-weight: 700; background: #f1f5f9; color: #475569; border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+.q-doctor-meta { display: flex; gap: 14px; font-size: 12px; color: #64748b; flex-wrap: wrap; }
+.q-doctor-meta strong { color: #0f172a; }
+.q-doctor-now { font-size: 13px; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px; padding: 6px 10px; color: #134e4a; }
+.q-mini-list { display: flex; flex-direction: column; gap: 4px; }
+.q-mini-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 5px 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+.q-mini-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #0f172a; }
+.q-urgency { font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; }
+.q-urgency--low { background: #d1fae5; color: #065f46; }
+.q-urgency--med { background: #fef3c7; color: #92400e; }
+.q-urgency--high { background: #fee2e2; color: #b91c1c; }
+.q-eta { font-size: 11.5px; color: #475569; white-space: nowrap; }
 
 @media (max-width: 720px) {
   .q-header { flex-direction: column; }

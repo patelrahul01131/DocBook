@@ -55,7 +55,7 @@ def _queue_rows(doctor, date):
 		filters=filters,
 		fields=["name", "patient", "doctor", "appointment_time", "status", "reason",
 			"visit_stage", "queue_token", "priority", "checked_in", "checked_in_at",
-			"called_at", "referral"],
+			"called_at", "referral", "fast_track", "ai_priority"],
 		order_by="appointment_time asc",
 	)
 
@@ -246,13 +246,22 @@ def get_my_queue_position(appointment=None):
 			"status": ["in", ["Pending", "Confirmed"]]}
 
 	appt = frappe.db.get_value("Appointment", filters,
-		["name", "doctor", "appointment_date", "visit_stage", "queue_token",
-		 "checked_in", "priority"], as_dict=True)
+		["name", "doctor", "appointment_date", "appointment_time", "visit_stage",
+		 "queue_token", "checked_in", "checked_in_at", "priority", "fast_track",
+		 "ai_priority", "called_at"], as_dict=True)
 	if not appt:
 		return {"found": False}
 
 	active, inactive = _queue_rows(appt.doctor, appt.appointment_date)
 	pos = next((r.queue_position for r in active if r.name == appt.name), None)
+	now_dt = frappe.utils.get_datetime()
+	has_now_serving = any(r.visit_stage == "In Consultation" for r in active)
+	avg_service = _avg_service_minutes(appt.doctor, appt.appointment_date)
+	estimated = None
+	if appt.checked_in and pos:
+		estimated = max(0.0, (pos - 1) * avg_service
+			- (avg_service / 2 if has_now_serving else 0.0))
+	waited = _minutes_since(appt.checked_in_at, now_dt) if appt.checked_in else 0.0
 	return {
 		"found": True,
 		"appointment": appt.name,
@@ -260,7 +269,14 @@ def get_my_queue_position(appointment=None):
 		"queue_token": appt.queue_token,
 		"visit_stage": appt.visit_stage,
 		"checked_in": appt.checked_in,
+		"checked_in_at": str(appt.checked_in_at) if appt.checked_in_at else None,
 		"priority": appt.priority,
+		"fast_track": bool(appt.fast_track),
+		"urgency_score": _urgency_score(appt, appt.appointment_date, now_dt),
+		"patients_ahead": max(0, (pos or 1) - 1) if pos else None,
+		"waited_minutes": round(waited, 1),
+		"estimated_wait_minutes": round(estimated, 1) if estimated is not None else None,
+		"average_wait_minutes": _avg_wait_minutes(appt.doctor, appt.appointment_date),
 	}
 
 
@@ -618,4 +634,596 @@ def receptionist_reschedule(appointment, appointment_date, appointment_time, rea
 		"checked_in": updates.get("checked_in", appt.checked_in or 0),
 		"queue_position": pos,
 	}
+
+
+@frappe.whitelist()
+def revert_check_in(appointment):
+    _require_reception()
+    appt = frappe.db.get_value(
+        "Appointment", appointment,
+        ["name", "patient", "doctor", "appointment_date", "checked_in", "visit_stage"],
+        as_dict=True,
+    )
+    if not appt:
+        frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+    frappe.db.set_value("Appointment", appointment, {
+        "checked_in": 0,
+        "checked_in_at": None,
+        "called_at": None,
+        "visit_stage": "",
+    })
+    frappe.db.commit()
+    active, inactive = _queue_rows(appt.doctor, appt.appointment_date)
+    return {
+        "success": True,
+        "message": _("Check-in reverted. Patient removed from active queue."),
+        "appointment": appointment,
+        "queue": active,
+        "other": inactive,
+    }
+
+@frappe.whitelist()
+def stop_consultation(appointment):
+    _require_reception()
+    appt = frappe.db.get_value(
+        "Appointment", appointment,
+        ["name", "patient", "doctor", "appointment_date", "visit_stage", "queue_token"],
+        as_dict=True,
+    )
+    if not appt:
+        frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+    if appt.visit_stage != "In Consultation":
+        frappe.throw(_("Only patients currently in consultation can be stopped"))
+    frappe.db.set_value("Appointment", appointment, {
+        "visit_stage": "Waiting",
+        "called_at": None,
+    })
+    frappe.db.commit()
+    active, inactive = _queue_rows(appt.doctor, appt.appointment_date)
+    return {
+        "success": True,
+        "message": _("Consultation stopped. Patient returned to Waiting stage."),
+        "appointment": appointment,
+        "queue": active,
+        "other": inactive,
+    }
+
+@frappe.whitelist()
+def reorder_queue(appointment, new_position, doctor=None, date=None):
+    _require_reception()
+    doctor_name = _resolve_doctor(doctor)
+    qdate = frappe.utils.getdate(date) if date else frappe.utils.getdate()
+    appt = frappe.db.get_value(
+        "Appointment", appointment,
+        ["name", "patient", "doctor", "appointment_date", "queue_token"],
+        as_dict=True,
+    )
+    if not appt:
+        frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+    if doctor_name and appt.doctor != doctor_name:
+        frappe.throw(_("Appointment does not belong to the selected doctor"))
+    active, inactive = _queue_rows(appt.doctor, qdate)
+    target = next((r for r in active if r.name == appointment), None)
+    if not target:
+        frappe.throw(_("Appointment is not in the active queue for this date"))
+    new_position = int(new_position)
+    if new_position < 1 or new_position > len(active):
+        frappe.throw(_("Invalid position"))
+    active.sort(key=lambda r: (r.stage_rank, r.queue_token or 10**6, str(r.appointment_time or "")))
+    active.pop(active.index(target))
+    active.insert(new_position - 1, target)
+    for i, r in enumerate(active, start=1):
+        frappe.db.set_value("Appointment", r.name, {"queue_token": i})
+    frappe.db.commit()
+    active, inactive = _queue_rows(appt.doctor, qdate)
+    pos = next((r.queue_position for r in active if r.name == appointment), None)
+    return {
+        "success": True,
+        "message": _("Queue order updated"),
+        "appointment": appointment,
+        "new_position": pos,
+        "queue": active,
+        "other": inactive,
+    }
+
+@frappe.whitelist()
+def get_receptionist_dashboard(date=None):
+    _require_reception()
+    qdate = frappe.utils.getdate(date) if date else frappe.utils.getdate()
+    all_appts = frappe.get_all(
+        "Appointment",
+        filters={"appointment_date": qdate, "docstatus": ["!=", 2]},
+        fields=["name", "patient", "doctor", "appointment_time", "status",
+                "visit_stage", "queue_token", "checked_in", "fast_track",
+                "checked_in_at", "called_at", "reason", "priority", "ai_priority"],
+    )
+    patients = {a.patient for a in all_appts}
+    pnames = {}
+    phones = {}
+    if patients:
+        for p in frappe.get_all("Patient Profile", filters={"name": ["in", list(patients)]},
+                                 fields=["name", "full_name", "phone"]):
+            pnames[p.name] = p.full_name
+            phones[p.name] = p.phone
+    doctors = {a.doctor for a in all_appts}
+    dnames = {}
+    if doctors:
+        for d in frappe.get_all("Doctor Profile", filters={"name": ["in", list(doctors)]},
+                                fields=["name", "full_name"]):
+            dnames[d.name] = d.full_name
+    for a in all_appts:
+        a.patient_name = pnames.get(a.patient)
+        a.patient_phone = phones.get(a.patient)
+        a.doctor_name = dnames.get(a.doctor)
+    total = len(all_appts)
+    checked_in = sum(1 for a in all_appts if a.checked_in)
+    waiting = sum(1 for a in all_appts if a.visit_stage == "Waiting")
+    in_consultation = sum(1 for a in all_appts if a.visit_stage == "In Consultation")
+    completed = sum(1 for a in all_appts if a.status == "Completed")
+    cancelled = sum(1 for a in all_appts if a.status == "Cancelled")
+    wait_times = []
+    for a in all_appts:
+        if a.checked_in_at and a.called_at:
+            try:
+                ci = frappe.utils.get_datetime(a.checked_in_at)
+                ca = frappe.utils.get_datetime(a.called_at)
+                wait_times.append((ca - ci).total_seconds() / 60.0)
+            except Exception:
+                pass
+    avg_wait = round(sum(wait_times) / len(wait_times), 1) if wait_times else 0
+    per_doctor = {}
+    for a in all_appts:
+        d = a.doctor
+        if d not in per_doctor:
+            per_doctor[d] = {"doctor": d, "doctor_name": a.doctor_name,
+                             "total": 0, "waiting": 0, "in_consultation": 0,
+                             "completed": 0}
+        per_doctor[d]["total"] += 1
+        if a.visit_stage == "Waiting":
+            per_doctor[d]["waiting"] += 1
+        if a.visit_stage == "In Consultation":
+            per_doctor[d]["in_consultation"] += 1
+        if a.status == "Completed":
+            per_doctor[d]["completed"] += 1
+    return {
+        "success": True,
+        "date": str(qdate),
+        "total_appointments": total,
+        "checked_in": checked_in,
+        "waiting": waiting,
+        "in_consultation": in_consultation,
+        "completed": completed,
+        "cancelled": cancelled,
+        "avg_waiting_time_minutes": avg_wait,
+        "per_doctor": list(per_doctor.values()),
+        "appointments": all_appts,
+        "message": _("Dashboard loaded"),
+    }
+
+@frappe.whitelist()
+def search_patients(query=None, phone=None, token=None, doctor=None, date=None):
+    _require_reception()
+    qdate = frappe.utils.getdate(date) if date else frappe.utils.getdate()
+    filters = {"docstatus": ["!=", 2]}
+    if qdate:
+        filters["appointment_date"] = qdate
+    if doctor:
+        filters["doctor"] = _resolve_doctor(doctor)
+    fields = ["name", "patient", "doctor", "appointment_date", "appointment_time",
+              "status", "visit_stage", "queue_token", "checked_in", "fast_track"]
+    rows = frappe.get_all("Appointment", filters=filters, fields=fields,
+                          order_by="appointment_time asc")
+    patients = {r.patient for r in rows}
+    pnames = {}
+    if patients:
+        for p in frappe.get_all("Patient Profile", filters={"name": ["in", list(patients)]},
+                                fields=["name", "full_name", "phone"]):
+            pnames[p.name] = p.full_name
+    doctors = {r.doctor for r in rows}
+    dnames = {}
+    if doctors:
+        for d in frappe.get_all("Doctor Profile", filters={"name": ["in", list(doctors)]},
+                                fields=["name", "full_name"]):
+            dnames[d.name] = d.full_name
+    results = []
+    for r in rows:
+        match = True
+        if query:
+            q = query.lower()
+            pname = (pnames.get(r.patient) or "").lower()
+            if q not in pname and q not in r.name.lower() and q not in (r.patient or "").lower():
+                match = False
+        if phone and pnames.get(r.patient):
+            p = frappe.db.get_value("Patient Profile", r.patient, "phone") or ""
+            if phone.replace("+", "").replace(" ", "") not in p.replace("+", "").replace(" ", ""):
+                match = False
+        if token:
+            if str(r.queue_token) != str(token):
+                match = False
+        if match:
+            r.patient_name = pnames.get(r.patient)
+            r.doctor_name = dnames.get(r.doctor)
+            results.append(r)
+    return {
+        "success": True,
+        "results": results,
+        "count": len(results),
+        "message": _("Search complete"),
+    }
+
+@frappe.whitelist()
+def join_queue_from_qr(qr_data=None, appointment_id=None, doctor=None, date=None):
+    require_login()
+    raw = (appointment_id or qr_data or "").strip()
+    appt_name = None
+    if raw.startswith("DOCBOOK|APT|"):
+        parts = raw.split("|")
+        if len(parts) >= 3:
+            appt_name = parts[2]
+    elif frappe.db.exists("Appointment", raw):
+        appt_name = raw
+    elif raw.upper().startswith("APT-") and frappe.db.exists("Appointment", raw.upper()):
+        appt_name = raw.upper()
+    else:
+        # Check by match on name or like
+        hit = frappe.db.get_value("Appointment", {"name": ["like", f"%{raw}%"]}, "name")
+        if hit:
+            appt_name = hit
+        elif raw:
+            appt_name = raw
+
+    if not appt_name:
+        frappe.throw(_("Invalid QR code or appointment ID"))
+    appt = frappe.db.get_value(
+        "Appointment", appt_name,
+        ["name", "patient", "doctor", "appointment_date", "status",
+         "checked_in", "visit_stage", "queue_token", "fast_track"],
+        as_dict=True,
+    )
+    if not appt:
+        frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_staff = any(r in user_roles for r in ("Receptionist", "System Manager", "Administrator"))
+    if not is_staff:
+        pat = current_patient()
+        if not pat or pat != appt.patient:
+            frappe.throw(_("Not authorized to check in this appointment"), frappe.PermissionError)
+
+    if appt.status in ("Completed", "Cancelled"):
+        frappe.throw(_("Cannot queue a {0} appointment").format(appt.status))
+    if appt.checked_in:
+        frappe.throw(_("Patient is already checked in (Token #{0})").format(appt.queue_token or ''))
+    token = appt.queue_token or _next_token(appt.doctor, appt.appointment_date)
+    stage = appt.visit_stage or "Waiting"
+    if appt.fast_track:
+        stage = "Waiting"
+        priority = 1
+    else:
+        priority = 0
+    frappe.db.set_value("Appointment", appt_name, {
+        "checked_in": 1,
+        "checked_in_at": frappe.utils.now_datetime(),
+        "queue_token": token,
+        "visit_stage": stage,
+    })
+    frappe.db.commit()
+    active, inactive = _queue_rows(appt.doctor, appt.appointment_date)
+    pos = next((r.queue_position for r in active if r.name == appt_name), None)
+    return {
+        "success": True,
+        "appointment": appt_name,
+        "patient": appt.patient,
+        "doctor": appt.doctor,
+        "token": token,
+        "queue_position": pos,
+        "visit_stage": stage,
+        "fast_track": bool(appt.fast_track),
+        "message": _("Patient joined the queue"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Dynamic wait times and urgency scoring (receptionist + patient views)
+# ---------------------------------------------------------------------------
+
+DEFAULT_SERVICE_MINUTES = 10.0
+
+
+def _minutes_since(value, now_dt):
+    """Minutes between a past datetime value and now_dt (0 when unknown)."""
+    if not value:
+        return 0.0
+    try:
+        past = frappe.utils.get_datetime(value)
+        return max(0.0, (now_dt - past).total_seconds() / 60.0)
+    except Exception:
+        return 0.0
+
+
+def _avg_service_minutes(doctor, date):
+    """Average minutes between consecutive 'called' events for a doctor today."""
+    rows = frappe.get_all(
+        "Appointment",
+        filters={"doctor": doctor, "appointment_date": date,
+                 "called_at": ["is", "set"]},
+        fields=["called_at"],
+        order_by="called_at asc",
+    )
+    times = []
+    for r in rows:
+        try:
+            times.append(frappe.utils.get_datetime(r.called_at))
+        except Exception:
+            pass
+    gaps = [(b - a).total_seconds() / 60.0 for a, b in zip(times, times[1:])]
+    gaps = [g for g in gaps if 0 < g < 120]
+    if not gaps:
+        return DEFAULT_SERVICE_MINUTES
+    return round(sum(gaps) / len(gaps), 1)
+
+
+def _avg_wait_minutes(doctor, date):
+    """Average historical wait (checked-in -> called) for a doctor on a date."""
+    rows = frappe.get_all(
+        "Appointment",
+        filters={"doctor": doctor, "appointment_date": date,
+                 "checked_in_at": ["is", "set"], "called_at": ["is", "set"]},
+        fields=["checked_in_at", "called_at"],
+    )
+    waits = []
+    for r in rows:
+        try:
+            ci = frappe.utils.get_datetime(r.checked_in_at)
+            ca = frappe.utils.get_datetime(r.called_at)
+            waits.append((ca - ci).total_seconds() / 60.0)
+        except Exception:
+            pass
+    if not waits:
+        return 0.0
+    return round(sum(waits) / len(waits), 1)
+
+
+def _urgency_score(row, qdate, now_dt):
+    """0-100 urgency for a queue row: priority flags + time already waited."""
+    score = 0.0
+    if row.get("fast_track"):
+        score += 40.0
+    if row.get("ai_priority"):
+        score += 25.0
+    if row.get("priority"):
+        score += 15.0
+    score += min(20.0, _minutes_since(row.get("checked_in_at"), now_dt) * 0.4)
+    late = 0.0
+    if row.get("appointment_time"):
+        try:
+            slot = frappe.utils.get_datetime("{0} {1}".format(qdate, row.get("appointment_time")))
+            late = max(0.0, (now_dt - slot).total_seconds() / 60.0)
+        except Exception:
+            late = 0.0
+    score += min(15.0, late * 0.5)
+    return int(min(100, round(score)))
+
+
+def _annotate_queue_waits(active, qdate, now_dt, avg_service, now_serving):
+    """Attach waited/urgency/estimated-wait fields to each active queue row."""
+    for r in active:
+        r["waited_minutes"] = round(_minutes_since(r.get("checked_in_at"), now_dt), 1)
+        r["urgency_score"] = _urgency_score(r, qdate, now_dt)
+        pos = r.get("queue_position")
+        if r.get("visit_stage") == "In Consultation":
+            r["estimated_wait_minutes"] = 0
+        elif pos:
+            estimate = (pos - 1) * avg_service - (avg_service / 2 if now_serving else 0.0)
+            r["estimated_wait_minutes"] = round(max(0.0, estimate), 1)
+        else:
+            r["estimated_wait_minutes"] = None
+    return active
+
+
+@frappe.whitelist()
+def get_queue_wait_overview(doctor=None, date=None):
+    """Per-doctor dynamic queue overview with urgency scores and estimated waits.
+
+    Receptionists/admins see all doctors with appointments on the date;
+    doctors see their own queue unless an explicit target is given.
+    """
+    require_login()
+    qdate = frappe.utils.getdate(date) if date else frappe.utils.getdate()
+    now_dt = frappe.utils.get_datetime()
+
+    doctor_name = _resolve_doctor(doctor)
+    if doctor and not doctor_name:
+        frappe.throw(_("Doctor not found"), frappe.DoesNotExistError)
+    if not doctor_name and not (is_receptionist() or is_admin()):
+        frappe.throw(_("Not authorized to view the queue"), frappe.PermissionError)
+
+    if doctor_name:
+        doctors = [doctor_name]
+    else:
+        doctors = []
+        for row in frappe.get_all(
+            "Appointment",
+            filters={"appointment_date": qdate, "status": ["in", ["Pending", "Confirmed"]]},
+            fields=["doctor"],
+            group_by="doctor",
+        ):
+            if row.doctor and row.doctor not in doctors:
+                doctors.append(row.doctor)
+
+    overview = []
+    for d in doctors:
+        active, inactive = _queue_rows(d, qdate)
+        avg_service = _avg_service_minutes(d, qdate)
+        now_serving = next((r for r in active if r.visit_stage == "In Consultation"), None)
+        _annotate_queue_waits(active, qdate, now_dt, avg_service, bool(now_serving))
+        dname = active[0].doctor_name if active else frappe.db.get_value(
+            "Doctor Profile", d, "full_name")
+        overview.append({
+            "doctor": d,
+            "doctor_name": dname,
+            "avg_service_minutes": avg_service,
+            "avg_wait_minutes": _avg_wait_minutes(d, qdate),
+            "now_serving": now_serving,
+            "waiting_count": sum(1 for r in active
+                                 if r.visit_stage in ("Waiting", "Ready For Review")),
+            "queue": active,
+            "inactive": inactive,
+        })
+
+    return {
+        "success": True,
+        "date": str(qdate),
+        "generated_at": str(now_dt),
+        "doctors": overview,
+        "message": _("Queue wait overview loaded"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Receptionist: patient directory and full patient records
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist()
+def search_patient_directory(query=None, phone=None, limit=25):
+    """Search every patient (not just today's queue) by name, user or phone."""
+    _require_reception()
+    try:
+        limit = max(1, min(50, int(limit)))
+    except (TypeError, ValueError):
+        limit = 25
+    query = (query or "").strip()
+    phone = (phone or "").strip()
+    rows = frappe.get_all(
+        "Patient Profile",
+        fields=["name", "user", "full_name", "phone", "age", "gender"],
+        order_by="full_name asc",
+        limit_page_length=200,
+    )
+    like = query.lower() if query else None
+    phone_digits = "".join(ch for ch in phone if ch.isdigit())
+    results = []
+    for r in rows:
+        if like or phone_digits:
+            matched = False
+            if like:
+                matched = (like in (r.full_name or "").lower()
+                           or like in (r.user or "").lower())
+            if not matched and phone_digits:
+                row_digits = "".join(ch for ch in (r.phone or "") if ch.isdigit())
+                matched = phone_digits in row_digits
+            if not matched:
+                continue
+        r.total_appointments = frappe.db.count(
+            "Appointment", {"patient": r.name, "docstatus": ["!=", 2]})
+        r.upcoming_appointments = frappe.db.count(
+            "Appointment",
+            {"patient": r.name, "status": ["in", ["Pending", "Confirmed"]],
+             "appointment_date": [">=", frappe.utils.getdate()]})
+        r.last_visit = frappe.db.get_value(
+            "Appointment",
+            {"patient": r.name, "status": "Completed"},
+            "appointment_date",
+            order_by="appointment_date desc",
+        )
+        results.append(r)
+        if len(results) >= limit:
+            break
+    return {"success": True, "results": results, "count": len(results),
+            "message": _("Patient directory searched")}
+
+
+@frappe.whitelist()
+def get_patient_records(patient):
+    """Complete record for one patient: appointments, prescriptions, history, reports."""
+    _require_reception()
+    if not frappe.db.exists("Patient Profile", patient):
+        frappe.throw(_("Patient not found"), frappe.DoesNotExistError)
+    profile = frappe.db.get_value(
+        "Patient Profile", patient,
+        ["name", "user", "full_name", "phone", "age", "gender"],
+        as_dict=True,
+    ) or {}
+    today = frappe.utils.getdate()
+
+    appts = frappe.get_all(
+        "Appointment",
+        filters={"patient": patient, "docstatus": ["!=", 2]},
+        fields=["name", "doctor", "appointment_date", "appointment_time", "status",
+                "visit_stage", "queue_token", "checked_in", "checked_in_at",
+                "reason", "symptoms", "diagnosis", "consultation_fee",
+                "payment_status", "created_at"],
+        order_by="appointment_date desc, appointment_time desc",
+        limit_page_length=100,
+    )
+    dnames = {}
+    for a in appts:
+        if a.doctor and a.doctor not in dnames:
+            dnames[a.doctor] = frappe.db.get_value("Doctor Profile", a.doctor, "full_name")
+        a.doctor_name = dnames.get(a.doctor)
+    upcoming = [a for a in appts
+                if a.status in ("Pending", "Confirmed") and a.appointment_date
+                and frappe.utils.getdate(a.appointment_date) >= today]
+    upcoming.sort(key=lambda a: (str(a.appointment_date), str(a.appointment_time or "")))
+    upcoming_names = {a.name for a in upcoming}
+    past = [a for a in appts if a.name not in upcoming_names][:30]
+
+    prx_rows = frappe.get_all(
+        "Prescription",
+        filters={"patient": patient},
+        fields=["name", "doctor", "appointment", "prescription_date", "status",
+                "diagnosis", "instructions", "follow_up_date", "notes"],
+        order_by="prescription_date desc, creation desc",
+        limit_page_length=50,
+    )
+    for p in prx_rows:
+        p.doctor_name = (frappe.db.get_value("Doctor Profile", p.doctor, "full_name")
+                         if p.doctor else None)
+        p.running = p.status == "Active"
+        p.medicines = frappe.get_all(
+            "Prescription Medicine",
+            filters={"prescription": p.name},
+            fields=["name", "prescribed_medicine_name", "dosage", "route", "frequency",
+                    "start_date", "end_date", "instructions", "status"],
+            order_by="creation asc",
+        ) or []
+
+    history = frappe.get_all(
+        "Patient Medical History",
+        filters={"patient": patient},
+        fields=["name", "record_date", "record_type", "medical_condition", "severity",
+                "status", "description", "symptoms", "allergies", "current_medications"],
+        order_by="record_date desc",
+        limit_page_length=50,
+    )
+    reports = frappe.get_all(
+        "Patient Report",
+        filters={"patient": patient},
+        fields=["name", "title", "report_type", "laboratory", "external", "status",
+                "findings", "report_file", "appointment", "creation"],
+        order_by="creation desc",
+        limit_page_length=50,
+    )
+    stats = {
+        "total_appointments": len(appts),
+        "upcoming": len(upcoming),
+        "completed": sum(1 for a in appts if a.status == "Completed"),
+        "cancelled": sum(1 for a in appts if a.status == "Cancelled"),
+        "active_prescriptions": sum(1 for p in prx_rows if p.running),
+        "history_entries": len(history),
+        "reports": len(reports),
+        "last_visit": next((a.appointment_date for a in appts
+                            if a.status == "Completed"), None),
+    }
+    return {
+        "success": True,
+        "patient": profile,
+        "stats": stats,
+        "upcoming": upcoming,
+        "past": past,
+        "prescriptions": prx_rows,
+        "medical_history": history,
+        "reports": reports,
+        "message": _("Patient records loaded"),
+    }
 

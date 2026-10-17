@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button, Dialog } from 'frappe-ui'
 import { call } from '../../api'
@@ -25,6 +25,20 @@ const rescheduleError = ref(null)
 const cancelling = ref(false)
 const deleting = ref(false)
 
+// QR pass + queue status
+const showQrModal = ref(false)
+const qrLoading = ref(false)
+const qrError = ref(null)
+const qrImgBroken = ref(false)
+const queueInfo = ref(null)
+let queuePoll = null
+
+// AI consultation summary (completed appointments only)
+const showAiSummaryModal = ref(false)
+const aiSummaryLoading = ref(false)
+const aiSummaryError = ref(null)
+const aiSummary = ref(null)
+
 async function fetchAppointment() {
   loading.value = true
   error.value = null
@@ -39,6 +53,8 @@ async function fetchAppointment() {
       rescheduleDate.value = appointment.value.appointment_date || ''
       rescheduleTime.value = appointment.value.appointment_time || ''
       rescheduleReason.value = appointment.value.reason || ''
+      loadQr()
+      loadQueueInfo()
     }
   } catch (err) {
     console.error('Fetch appointment error:', err)
@@ -129,6 +145,130 @@ async function deleteAppointment() {
   }
 }
 
+async function loadQr(force = false) {
+  if (!appointment.value) return
+  if (['Completed', 'Cancelled'].includes(appointment.value.status)) return
+  if ((appointment.value.qr_data_url || appointment.value.qr_code) && !force) return
+  qrLoading.value = true
+  qrError.value = null
+  qrImgBroken.value = false
+  try {
+    const res = await call('docbook.api.appointment.generate_qr_code', {
+      appointment_id: appointment.value.name,
+    })
+    appointment.value.qr_code = res?.qr_code || null
+    appointment.value.qr_data_url = res?.qr_data_url || null
+  } catch (err) {
+    qrError.value = err.message || 'Unable to generate QR code.'
+  } finally {
+    qrLoading.value = false
+  }
+}
+
+function openQr() {
+  showQrModal.value = true
+  loadQr()
+}
+
+function retryQrImage() {
+  qrImgBroken.value = false
+  loadQr(true)
+}
+
+async function downloadQr() {
+  if (!appointment.value) return
+  if (!appointment.value.qr_data_url && !appointment.value.qr_code) {
+    await loadQr(true)
+  }
+  const dataUrl = appointment.value.qr_data_url
+  if (dataUrl && dataUrl.startsWith('data:image/')) {
+    const link = document.createElement('a')
+    link.href = dataUrl
+    link.download = `QR-${appointment.value.name}.png`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    return
+  }
+
+  // Draw from img element onto canvas to ensure a clean local PNG download
+  const qrImg = document.querySelector('.qr-img')
+  if (qrImg && qrImg.naturalWidth) {
+    try {
+      const canvas = document.createElement('canvas')
+      canvas.width = qrImg.naturalWidth
+      canvas.height = qrImg.naturalHeight
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(qrImg, 0, 0)
+      const pngUrl = canvas.toDataURL('image/png')
+      const link = document.createElement('a')
+      link.href = pngUrl
+      link.download = `QR-${appointment.value.name}.png`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      return
+    } catch (e) {
+      console.warn('Canvas export failed, falling back to fetch', e)
+    }
+  }
+
+  const url = appointment.value.qr_code
+  if (!url) {
+    alert(qrError.value || 'QR code is not available yet.')
+    return
+  }
+  try {
+    const resp = await fetch(url)
+    const blob = await resp.blob()
+    const link = document.createElement('a')
+    const objectUrl = URL.createObjectURL(blob)
+    link.href = objectUrl
+    link.download = `QR-${appointment.value.name}.png`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(objectUrl)
+  } catch {
+    window.open(url, '_blank')
+  }
+}
+
+async function openAiSummary() {
+  if (!appointment.value) return
+  showAiSummaryModal.value = true
+  aiSummaryLoading.value = true
+  aiSummaryError.value = null
+  aiSummary.value = null
+  try {
+    aiSummary.value = await call('docbook.api.prescription.ai_generate_summary', {
+      appointment: appointment.value.name,
+    })
+    if (!aiSummary.value?.summary && !aiSummary.value?.key_points?.length) {
+      aiSummaryError.value = 'AI could not generate a summary right now. Please try again.'
+    }
+  } catch (err) {
+    aiSummaryError.value = err.message || 'AI summary failed. Please try again.'
+  } finally {
+    aiSummaryLoading.value = false
+  }
+}
+
+async function loadQueueInfo() {
+  if (!appointment.value) return
+  if (['Completed', 'Cancelled'].includes(appointment.value.status)) {
+    queueInfo.value = null
+    return
+  }
+  try {
+    queueInfo.value = await call('docbook.api.queue.get_my_queue_position', {
+      appointment: appointment.value.name,
+    })
+  } catch {
+    queueInfo.value = null
+  }
+}
+
 function formatDate(d) {
   if (!d) return '—'
   return new Date(`${d}T00:00:00`).toLocaleDateString('en-IN', {
@@ -161,6 +301,16 @@ const canEditOrCancel = computed(() => {
 
 onMounted(() => {
   fetchAppointment()
+  // Keep queue/check-in status fresh while the appointment is active.
+  queuePoll = setInterval(() => {
+    if (appointment.value && !['Completed', 'Cancelled'].includes(appointment.value.status)) {
+      loadQueueInfo()
+    }
+  }, 30000)
+})
+
+onUnmounted(() => {
+  if (queuePoll) clearInterval(queuePoll)
 })
 </script>
 
@@ -213,6 +363,20 @@ onMounted(() => {
             >
               {{ appointment.status }}
             </span>
+
+            <!-- Priority / fast-track badges -->
+            <span v-if="appointment.fast_track" class="priority-pill priority-pill--fast">⚡ Fast Track</span>
+            <span v-else-if="appointment.priority" class="priority-pill priority-pill--return">Priority Return</span>
+            <span v-if="appointment.ai_priority === 'High'" class="priority-pill priority-pill--high">AI: High Priority</span>
+
+            <button
+              v-if="!['Completed', 'Cancelled'].includes(appointment.status)"
+              class="action-btn action-btn--qr"
+              title="Show QR check-in pass"
+              @click="openQr"
+            >
+              ▦ QR Pass
+            </button>
 
             <!-- Top Actions -->
             <div v-if="canEditOrCancel" class="action-buttons-row">
@@ -504,6 +668,94 @@ onMounted(() => {
               </div>
             </section>
 
+            <!-- AI Consultation Summary (completed visits only) -->
+            <section v-if="appointment.status === 'Completed'" class="detail-card ai-summary-card">
+              <div class="card-title-row">
+                <div class="icon-circle purple"><span>🤖</span></div>
+                <div>
+                  <h3>AI Consultation Summary</h3>
+                  <p>Plain-language recap of this visit</p>
+                </div>
+              </div>
+              <p class="ai-summary-teaser">
+                Understand what Dr.
+                {{ appointment.doctor_info?.full_name || appointment.doctor_name || 'your doctor' }}
+                diagnosed, the medicines prescribed, and what to do next.
+              </p>
+              <button
+                class="btn-primary ai-summary-btn"
+                :disabled="aiSummaryLoading"
+                @click="openAiSummary"
+              >
+                🤖 {{ aiSummaryLoading ? 'Generating…' : 'View AI Summary' }}
+              </button>
+            </section>
+
+            <!-- Check-in & Queue Pass -->
+            <section v-if="!['Completed', 'Cancelled'].includes(appointment.status)" class="detail-card queue-pass-card">
+              <div class="card-title-row">
+                <div class="icon-circle amber"><span>▦</span></div>
+                <div>
+                  <h3>Check-in & Queue</h3>
+                  <p>Show this pass at reception to join the doctor's queue</p>
+                </div>
+              </div>
+
+              <div class="qr-box">
+                <div v-if="qrLoading" class="qr-placeholder">Generating QR pass…</div>
+                <div v-else-if="qrImgBroken && appointment.qr_code" class="qr-placeholder">
+                  QR image failed to load.
+                  <button class="btn-secondary" @click="retryQrImage">Retry</button>
+                </div>
+                <img
+                  v-else-if="appointment.qr_data_url || appointment.qr_code"
+                  :src="appointment.qr_data_url || appointment.qr_code"
+                  alt="Appointment QR code"
+                  class="qr-img"
+                  @error="qrImgBroken = true"
+                  @load="qrImgBroken = false"
+                />
+                <div v-else class="qr-placeholder">{{ qrError || 'QR pass unavailable' }}</div>
+                <div class="qr-actions">
+                  <button class="btn-secondary" @click="openQr">View Full Size</button>
+                  <button class="btn-secondary" :disabled="qrLoading" @click="downloadQr">⬇ Download QR</button>
+                </div>
+              </div>
+
+              <div class="queue-status-rows">
+                <div class="queue-status-row">
+                  <span>Check-in</span>
+                  <strong :class="appointment.checked_in ? 'ok' : ''">
+                    {{ appointment.checked_in ? '✅ Checked In' : 'Not checked in' }}
+                  </strong>
+                </div>
+                <div v-if="appointment.queue_token" class="queue-status-row">
+                  <span>Token</span>
+                  <strong>#{{ appointment.queue_token }}</strong>
+                </div>
+                <div v-if="appointment.visit_stage" class="queue-status-row">
+                  <span>Stage</span>
+                  <strong>{{ appointment.visit_stage }}</strong>
+                </div>
+                <div v-if="queueInfo?.queue_position" class="queue-status-row">
+                  <span>Position in queue</span>
+                  <strong>{{ queueInfo.queue_position }}</strong>
+                </div>
+                <div v-if="queueInfo?.patients_ahead != null" class="queue-status-row">
+                  <span>Patients ahead</span>
+                  <strong>{{ queueInfo.patients_ahead }}</strong>
+                </div>
+                <div v-if="queueInfo?.estimated_wait_minutes != null" class="queue-status-row">
+                  <span>Estimated wait</span>
+                  <strong>~{{ queueInfo.estimated_wait_minutes }} min</strong>
+                </div>
+                <div v-if="queueInfo?.average_wait_minutes" class="queue-status-row">
+                  <span>Average wait today</span>
+                  <strong>{{ queueInfo.average_wait_minutes }} min</strong>
+                </div>
+              </div>
+            </section>
+
             <!-- Patient Profile Card -->
             <section class="detail-card">
               <div class="card-title-row">
@@ -537,7 +789,7 @@ onMounted(() => {
             </section>
 
             <!-- Quick Guidelines -->
-            <section class="detail-card guidelines-card">
+            <section v-if="appointment.status !== 'Completed'" class="detail-card guidelines-card">
               <h4>Patient Checklist</h4>
               <ul class="guidelines-list">
                 <li>Arrive or be available online 10 minutes before {{ formatTime(appointment.appointment_time) }}.</li>
@@ -552,6 +804,99 @@ onMounted(() => {
 
       </div>
 
+    </div>
+
+    <!-- QR Pass Modal -->
+    <div v-if="showQrModal" class="modal-backdrop" @click.self="showQrModal = false">
+      <div class="modal-card qr-modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>Check-in QR Pass</h3>
+            <p class="modal-subtitle">
+              Appointment #{{ appointment?.name }} · {{ formatDate(appointment?.appointment_date) }}
+              · {{ formatTime(appointment?.appointment_time) }}
+            </p>
+          </div>
+          <button class="modal-close" @click="showQrModal = false">✕</button>
+        </div>
+        <div class="qr-modal-body">
+          <div v-if="qrLoading" class="qr-placeholder">Generating QR pass…</div>
+          <div v-else-if="qrImgBroken && appointment?.qr_code" class="qr-placeholder">
+            QR image failed to load.
+            <button class="btn-secondary" @click="retryQrImage">Retry</button>
+          </div>
+          <img
+            v-else-if="appointment?.qr_data_url || appointment?.qr_code"
+            :src="appointment.qr_data_url || appointment.qr_code"
+            alt="Appointment QR code"
+            class="qr-img qr-img--lg"
+            @error="qrImgBroken = true"
+            @load="qrImgBroken = false"
+          />
+          <div v-else class="qr-placeholder">{{ qrError || 'QR pass unavailable' }}</div>
+          <p class="qr-hint">
+            Let the receptionist scan this code at the clinic to check you in and add you to
+            Dr. {{ appointment?.doctor_info?.full_name || appointment?.doctor_name || 'Doctor' }}'s queue.
+          </p>
+          <button class="btn-primary" :disabled="qrLoading" @click="downloadQr">⬇ Download QR</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI SUMMARY MODAL -->
+    <div v-if="showAiSummaryModal" class="modal-backdrop" @click.self="showAiSummaryModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>🤖 AI Consultation Summary</h3>
+            <p class="modal-subtitle">
+              Appointment #{{ appointment?.name }} · {{ formatDate(appointment?.appointment_date) }}
+            </p>
+          </div>
+          <button class="modal-close" @click="showAiSummaryModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="aiSummaryLoading" class="ai-loading">
+            <span class="ai-spinner"></span>
+            Generating a patient-friendly summary…
+          </div>
+          <div v-else-if="aiSummaryError" class="ai-error">{{ aiSummaryError }}</div>
+          <template v-else-if="aiSummary">
+            <p v-if="aiSummary.summary" class="ai-summary-text">{{ aiSummary.summary }}</p>
+            <div v-if="aiSummary.key_points && aiSummary.key_points.length" class="ai-block">
+              <h4>Key Points</h4>
+              <ul>
+                <li v-for="(k, i) in aiSummary.key_points" :key="'k' + i">{{ k }}</li>
+              </ul>
+            </div>
+            <div v-if="aiSummary.next_steps && aiSummary.next_steps.length" class="ai-block">
+              <h4>Next Steps</h4>
+              <ul>
+                <li v-for="(n, i) in aiSummary.next_steps" :key="'n' + i">{{ n }}</li>
+              </ul>
+            </div>
+            <div v-if="aiSummary.medicines && aiSummary.medicines.length" class="ai-block">
+              <h4>Medicines</h4>
+              <ul>
+                <li v-for="(m, i) in aiSummary.medicines" :key="'m' + i">
+                  {{ m.prescribed_medicine_name || 'Medicine' }}
+                  — {{ m.dosage }}<template v-if="m.frequency"> · {{ m.frequency }}</template>
+                </li>
+              </ul>
+            </div>
+            <p class="ai-note">
+              AI-generated summary — for guidance only. Always follow your doctor's advice.
+            </p>
+          </template>
+          <button
+            class="btn-secondary ai-close"
+            style="margin-top: 14px;"
+            @click="showAiSummaryModal = false"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Reschedule / Edit Modal -->
@@ -713,6 +1058,7 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .action-btn {
@@ -1136,4 +1482,105 @@ onMounted(() => {
 .report-status--pending { background: #fef3c7; color: #92400e; }
 .report-open { font-size: 13px; font-weight: 700; color: #0d9488; text-decoration: none; }
 .referral-reason { font-size: 13px; color: #334155; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px; padding: 10px 12px; margin: 0; }
+
+/* Priority badges + QR pass */
+.priority-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.priority-pill--fast { background: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; }
+.priority-pill--return { background: #dbeafe; color: #1e40af; border: 1px solid #bfdbfe; }
+.priority-pill--high { background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
+.action-btn--qr {
+  background: #0f172a;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.action-btn--qr:hover { background: #1e293b; }
+
+.queue-pass-card .qr-box { text-align: center; margin-bottom: 14px; }
+.qr-img {
+  width: 160px;
+  height: 160px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  object-fit: contain;
+  display: inline-block;
+}
+.qr-img--lg { width: 240px; height: 240px; }
+.qr-placeholder {
+  width: 160px;
+  min-height: 120px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 12px;
+  padding: 10px;
+}
+.qr-actions { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
+
+.queue-status-rows { display: flex; flex-direction: column; gap: 8px; }
+.queue-status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.queue-status-row span { color: #64748b; }
+.queue-status-row strong { color: #0f172a; }
+.queue-status-row strong.ok { color: #047857; }
+
+.qr-modal-card { max-width: 420px; }
+.qr-modal-body { padding: 20px 24px 24px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.qr-hint { font-size: 13px; color: #475569; margin: 0; }
+.modal-subtitle { font-size: 12.5px; color: #64748b; margin: 4px 0 0; }
+
+/* ---------- AI consultation summary (patient view) ---------- */
+.ai-summary-teaser { font-size: 13px; color: #64748b; line-height: 1.55; margin: 0 0 12px; }
+.ai-summary-btn { width: 100%; justify-content: center; }
+.ai-loading { display: flex; align-items: center; gap: 10px; color: #64748b; font-size: 13px; padding: 8px 0; }
+.ai-spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #cbd5e1; border-top-color: #0d9488;
+  animation: ai-spin 0.8s linear infinite; display: inline-block;
+}
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+.ai-error {
+  font-size: 13px; color: #b91c1c; background: #fef2f2;
+  border: 1px solid #fecaca; border-radius: 10px; padding: 10px 12px;
+}
+.ai-summary-text {
+  font-size: 14px; line-height: 1.6; color: #0f172a; background: #f8fafc;
+  border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; margin: 0 0 14px;
+}
+.ai-block { margin-bottom: 14px; }
+.ai-block h4 {
+  font-size: 12px; font-weight: 800; color: #0d9488; margin: 0 0 6px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ai-block ul { margin: 0; padding-left: 18px; font-size: 13px; color: #334155; }
+.ai-block li { margin-bottom: 4px; }
+.ai-note {
+  font-size: 11.5px; color: #92400e; background: #fffbeb;
+  border: 1px solid #fde68a; border-radius: 8px; padding: 8px 10px; margin: 0;
+}
 </style>

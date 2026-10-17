@@ -47,6 +47,39 @@ def get_doctor_by_user(user_name):
 	return frappe.get_doc("Doctor Profile", user_doc.name)
 
 
+@frappe.whitelist(allow_guest=True)
+def get_doctors_by_specialty(specialty=None):
+	"""
+	Return approved doctors for a given specialty.
+	Used by the AI booking flow: patient describes a problem,
+	AI identifies the specialty, then we list matching doctors.
+	"""
+	if not specialty:
+		return []
+
+	doctors = frappe.get_all(
+		"Doctor Profile",
+		filters={
+			"specialty": specialty,
+			"is_approved": 1,
+		},
+		fields=[
+			"user",
+			"full_name",
+			"phone",
+			"specialty",
+			"qualification",
+			"experience_years",
+			"consultation_fee",
+			"bio",
+			"profile_image",
+			"rating",
+		],
+		order_by="rating desc, full_name asc",
+	)
+	return doctors or []
+
+
 @frappe.whitelist()
 def get_doctor_dashboard():
 	"""

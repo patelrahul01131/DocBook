@@ -1,616 +1,160 @@
 <script setup>
-import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from 'frappe-ui'
 
 const router = useRouter()
 
-const mobileOpen = ref(false)
-
-// Highlight stats shown on the landing page.
-const highlights = [
-  { value: '24/7', label: 'Book anytime' },
-  { value: '50+', label: 'Specialist doctors' },
-  { value: '15 min', label: 'Reminder checks' },
-]
-
-const features = [
-  {
-    icon: 'lucide-search',
-    title: 'Find the right doctor',
-    text: 'Browse verified specialists by specialty, experience, and fee.',
-    accent: 'blue',
-  },
-  {
-    icon: 'lucide-calendar-check',
-    title: 'Book in seconds',
-    text: 'Real-time slots that respect doctor schedules and holidays.',
-    accent: 'teal',
-  },
-  {
-    icon: 'lucide-pill',
-    title: 'Smart prescriptions',
-    text: 'Medicines, dosages and treatment plans in one secure place.',
-    accent: 'amber',
-  },
-  {
-    icon: 'lucide-bell',
-    title: 'Medicine reminders',
-    text: 'Automated email reminders so you never miss a dose.',
-    accent: 'purple',
-  },
-]
-
-const steps = [
-  { n: '1', title: 'Create your account', text: 'Sign up as a patient in under a minute.' },
-  { n: '2', title: 'Pick your doctor', text: 'Compare specialists and choose the best fit.' },
-  { n: '3', title: 'Book & get care', text: 'Reserve a slot and manage everything online.' },
-]
-
-function goLogin() {
-  router.push('/login')
-}
-
-function goSignup() {
-  router.push('/signup')
-}
+function goHome() { router.push('/home') }
+function goLogin() { router.push('/login') }
+function goSignup() { router.push('/signup') }
 </script>
 
 <template>
-  <div class="lp">
-    <!-- ============ Navbar ============ -->
-    <header class="lp-nav">
-      <div class="lp-nav-inner">
-        <div class="lp-brand">
-          <div class="lp-brand-mark">🩺</div>
-          <div class="lp-brand-copy">
-            <span class="lp-brand-name">DocBook</span>
-            <span class="lp-brand-tag">Health, simplified</span>
-          </div>
+  <div class="landing">
+    <nav class="land-nav">
+      <div class="land-nav-inner">
+        <div class="land-brand">
+          <div class="land-mark">🩺</div>
+          <div class="land-name">DocBook</div>
         </div>
-
-        <nav class="lp-nav-links" :class="{ 'is-open': mobileOpen }">
-          <a href="#features" @click.prevent="mobileOpen = false">Features</a>
-          <a href="#how" @click.prevent="mobileOpen = false">How it works</a>
-          <a href="#start" @click.prevent="mobileOpen = false">Get started</a>
-        </nav>
-
-        <div class="lp-nav-actions">
+        <div class="land-links">
+          <a href="#features" class="land-link">Features</a>
+          <a href="#how-it-works" class="land-link">How it works</a>
+          <a href="#specialties" class="land-link">Specialties</a>
+        </div>
+        <div class="land-actions">
           <Button label="Log in" @click="goLogin" />
-          <Button label="Sign up free" variant="solid" theme="green" @click="goSignup" class="lp-btn-teal" />
-          <button
-            class="lp-burger"
-            type="button"
-            :aria-expanded="mobileOpen"
-            aria-label="Toggle menu"
-            @click="mobileOpen = !mobileOpen"
-          >
-            <span></span><span></span><span></span>
-          </button>
+          <Button label="Sign up" variant="solid" theme="green" class="land-btn-primary" @click="goSignup" />
+        </div>
+      </div>
+    </nav>
+
+    <header class="land-hero">
+      <div class="land-hero-inner">
+        <div class="land-hero-content">
+          <span class="land-hero-kicker">Healthcare made simple</span>
+          <h1 class="land-hero-title">Book the right doctor<br /><span class="land-title-highlight">in seconds.</span></h1>
+          <p class="land-hero-desc">Describe your symptoms and our AI triage matches you with the right specialist, then book your appointment instantly — no phone calls, no waiting rooms.</p>
+          <div class="land-hero-actions">
+            <Button label="Start AI Booking" variant="solid" theme="green" size="lg" class="land-btn-hero" @click="goHome" />
+            <Button label="Browse Doctors" size="lg" class="land-btn-secondary" @click="goHome" />
+          </div>
+          <div class="land-hero-trust"><span class="land-trust-dot"></span><span>Trusted by 10,000+ patients</span></div>
+        </div>
+        <div class="land-hero-visual">
+          <div class="land-visual-card">
+            <div class="land-visual-icon">🏥</div>
+            <div class="land-visual-box"><div class="land-stat big">10k+</div><div class="land-stat-label">patients</div></div>
+            <div class="land-visual-box land-visual-box--small"><div class="land-stat">500+</div><div class="land-stat-label">doctors</div></div>
+          </div>
         </div>
       </div>
     </header>
-
-    <!-- ============ Hero ============ -->
-    <section class="lp-hero" id="start">
-      <div class="lp-hero-glow" aria-hidden="true"></div>
-      <div class="lp-hero-inner">
-        <div class="lp-hero-copy">
-          <div class="lp-pill">
-            <span class="lp-pill-dot"></span>
-            Trusted healthcare appointments
-          </div>
-          <h1>Book doctor appointments, <span class="lp-grad">effortlessly</span>.</h1>
-          <p class="lp-lede">
-            DocBook connects patients with verified doctors. Manage appointments,
-            prescriptions and medicine reminders — all from one beautiful dashboard.
-          </p>
-
-          <div class="lp-hero-cta">
-            <Button label="Book as Patient" variant="solid" theme="green" size="lg" @click="goSignup" class="lp-btn-teal" />
-            <Button label="Doctor Login" size="lg" @click="goLogin" />
-          </div>
-
-          <div class="lp-highlights">
-            <div v-for="h in highlights" :key="h.label" class="lp-highlight">
-              <strong>{{ h.value }}</strong>
-              <span>{{ h.label }}</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="lp-hero-art" aria-hidden="true">
-          <div class="lp-card-float lp-card-float--1">
-            <div class="lp-fc-icon blue"><span class="lucide-calendar-check"></span></div>
-            <div>
-              <strong>Appointment confirmed</strong>
-              <span>Dr. Sharma · Tomorrow 10:00</span>
-            </div>
-          </div>
-          <div class="lp-card-float lp-card-float--2">
-            <div class="lp-fc-icon teal"><span class="lucide-stethoscope"></span></div>
-            <div>
-              <strong>Find specialists</strong>
-              <span>Cardiology, Dental, &amp; more</span>
-            </div>
-          </div>
-          <div class="lp-card-float lp-card-float--3">
-            <div class="lp-fc-icon amber"><span class="lucide-bell"></span></div>
-            <div>
-              <strong>Medicine reminder</strong>
-              <span>Take vitamin D · 9:00 PM</span>
-            </div>
-          </div>
+    <section id="features" class="land-section land-features">
+      <div class="land-section-inner">
+        <div class="land-section-head"><h2 class="land-section-title">Why choose DocBook?</h2><p class="land-section-sub">Everything you need to manage your care in one place.</p></div>
+        <div class="land-feature-grid">
+          <div class="land-feature-card"><div class="land-feature-icon">🩺</div><h3 class="land-feature-title">AI-Powered Triage</h3><p class="land-feature-desc">Describe your symptoms and let AI match you with the right specialist.</p></div>
+          <div class="land-feature-card"><div class="land-feature-icon">📅</div><h3 class="land-feature-title">Smart Booking</h3><p class="land-feature-desc">Book appointments with verified doctors and get instant confirmation.</p></div>
+          <div class="land-feature-card"><div class="land-feature-icon">📄</div><h3 class="land-feature-title">Medical Reports</h3><p class="land-feature-desc">Upload and preview lab results, imaging, and prescriptions securely.</p></div>
+          <div class="land-feature-card"><div class="land-feature-icon">⚡</div><h3 class="land-feature-title">Fast Track</h3><p class="land-feature-desc">Priority slots for urgent cases based on AI-assessed urgency.</p></div>
         </div>
       </div>
     </section>
 
-    <!-- ============ Features ============ -->
-    <section class="lp-section" id="features">
-      <div class="lp-section-head">
-        <div class="lp-eyebrow">WHY DOCBOOK</div>
-        <h2>Everything you need for modern care</h2>
-        <p>A complete patient &amp; doctor experience, built for speed and clarity.</p>
-      </div>
-
-      <div class="lp-feature-grid">
-        <article v-for="f in features" :key="f.title" class="lp-feature">
-          <div class="lp-feature-icon" :class="`accent-${f.accent}`">
-            <span :class="f.icon"></span>
-          </div>
-          <h3>{{ f.title }}</h3>
-          <p>{{ f.text }}</p>
-        </article>
-      </div>
-    </section>
-
-    <!-- ============ How it works ============ -->
-    <section class="lp-section lp-section--tint" id="how">
-      <div class="lp-section-head">
-        <div class="lp-eyebrow">HOW IT WORKS</div>
-        <h2>Get care in three simple steps</h2>
-        <p>From sign-up to consultation, DocBook keeps it simple.</p>
-      </div>
-
-      <div class="lp-steps">
-        <article v-for="s in steps" :key="s.n" class="lp-step">
-          <div class="lp-step-n">{{ s.n }}</div>
-          <h3>{{ s.title }}</h3>
-          <p>{{ s.text }}</p>
-        </article>
-      </div>
-    </section>
-
-    <!-- ============ CTA ============ -->
-    <section class="lp-cta-band">
-      <div class="lp-cta-card">
-        <h2>Ready to take control of your health?</h2>
-        <p>Create a free patient account, or log in to your doctor portal.</p>
-        <div class="lp-cta-actions">
-          <Button label="Create free account" variant="solid" theme="green" size="lg" @click="goSignup" class="lp-btn-teal" />
-          <Button label="I already have an account" size="lg" @click="goLogin" class="lp-btn-light" />
+    <section id="how-it-works" class="land-section land-steps">
+      <div class="land-section-inner">
+        <div class="land-section-head"><h2 class="land-section-title">How it works</h2><p class="land-section-sub">From symptoms to appointment in three steps.</p></div>
+        <div class="land-step-grid">
+          <div class="land-step-card"><div class="land-step-num">1</div><h3 class="land-step-title">Describe your problem</h3><p class="land-step-desc">Tell our AI your symptoms in plain words.</p></div>
+          <div class="land-step-card"><div class="land-step-num">2</div><h3 class="land-step-title">AI finds the specialist</h3><p class="land-step-desc">AI identifies the right specialty and matches available doctors.</p></div>
+          <div class="land-step-card"><div class="land-step-num">3</div><h3 class="land-step-title">Book your appointment</h3><p class="land-step-desc">Pick a slot and confirm — you\'re all set.</p></div>
         </div>
       </div>
     </section>
 
-    <!-- ============ Footer ============ -->
-    <footer class="lp-footer">
-      <div class="lp-footer-brand">
-        <div class="lp-brand-mark">🩺</div>
-        <span>DocBook</span>
+    <section id="specialties" class="land-section land-specialties">
+      <div class="land-section-inner">
+        <div class="land-section-head"><h2 class="land-section-title">Specialties</h2><p class="land-section-sub">We cover all major medical specialties.</p></div>
+        <div class="land-specialty-grid">
+          <div class="land-specialty-chip">Cardiology</div>
+          <div class="land-specialty-chip">Dermatology</div>
+          <div class="land-specialty-chip">Pediatrics</div>
+          <div class="land-specialty-chip">Gynecology</div>
+          <div class="land-specialty-chip">Orthopedics</div>
+          <div class="land-specialty-chip">Neurology</div>
+          <div class="land-specialty-chip">General Medicine</div>
+        </div>
       </div>
-      <p>© {{ new Date().getFullYear() }} DocBook. Book appointments, the smart way.</p>
-      <div class="lp-footer-links">
-        <a href="#features" @click.prevent>Features</a>
-        <a href="#how" @click.prevent>How it works</a>
-        <button type="button" @click="goLogin">Log in</button>
+    </section>
+
+    <footer class="land-footer">
+      <div class="land-footer-inner">
+        <div class="land-footer-brand"><div class="land-mark">🩺</div><div class="land-name" style="font-size: 18px; font-weight: 800;">DocBook</div></div>
+        <p class="land-footer-copy">© 2026 DocBook. AI-powered patient care.</p>
+        <div class="land-footer-actions">
+          <Button label="Log in" @click="goLogin" />
+          <Button label="Sign up" variant="solid" theme="green" class="land-btn-primary" @click="goSignup" />
+        </div>
       </div>
     </footer>
   </div>
 </template>
 
-
 <style scoped>
-.lp {
-  min-height: 100vh;
-  background: #f4f7fb;
-  color: #0f172a;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-}
-
-.lp-grad {
-  background: linear-gradient(120deg, #0d9488, #2563eb);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* ---------- Navbar ---------- */
-.lp-nav {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(14px);
-  border-bottom: 1px solid #e8eef5;
-}
-
-.lp-nav-inner {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 14px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-}
-
-.lp-brand { display: flex; align-items: center; gap: 11px; }
-
-.lp-brand-mark {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-  background: linear-gradient(135deg, #0d9488, #0e7490);
-  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.28);
-}
-
-.lp-brand-copy { display: flex; flex-direction: column; line-height: 1.1; }
-.lp-brand-name { font-size: 18px; font-weight: 800; letter-spacing: -0.4px; }
-.lp-brand-tag { font-size: 11px; color: #0d9488; font-weight: 600; }
-
-.lp-nav-links { display: flex; gap: 28px; }
-.lp-nav-links a {
-  font-size: 14px;
-  font-weight: 600;
-  color: #475569;
-  text-decoration: none;
-  transition: color 0.15s;
-}
-.lp-nav-links a:hover { color: #0d9488; }
-
-.lp-nav-actions { display: flex; align-items: center; gap: 10px; }
-
-.lp-burger {
-  display: none;
-  flex-direction: column;
-  gap: 5px;
-  padding: 8px;
-  background: none;
-  border: none;
-  cursor: pointer;
-}
-.lp-burger span {
-  width: 22px;
-  height: 2px;
-  border-radius: 2px;
-  background: #0f172a;
-}
-
-/* ---------- Hero ---------- */
-.lp-hero {
-  position: relative;
-  overflow: hidden;
-  padding: 72px 24px 88px;
-}
-
-.lp-hero-glow {
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 18% 12%, rgba(13, 148, 136, 0.14), transparent 38%),
-    radial-gradient(circle at 82% 22%, rgba(37, 99, 235, 0.12), transparent 40%);
-  pointer-events: none;
-}
-
-.lp-hero-inner {
-  position: relative;
-  max-width: 1200px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: 1.05fr 0.95fr;
-  gap: 48px;
-  align-items: center;
-}
-
-.lp-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #475569;
-  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
-}
-
-.lp-pill-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
-}
-
-.lp-hero-copy h1 {
-  margin: 20px 0 16px;
-  font-size: 52px;
-  font-weight: 800;
-  line-height: 1.05;
-  letter-spacing: -1.5px;
-}
-
-.lp-lede {
-  margin: 0 0 30px;
-  font-size: 17px;
-  line-height: 1.6;
-  color: #475569;
-  max-width: 520px;
-}
-
-.lp-hero-cta { display: flex; gap: 12px; flex-wrap: wrap; }
-
-/* Brand teal overrides for frappe-ui Buttons (valid theme=green base) */
-:deep(.lp-btn-teal) {
-  background: linear-gradient(120deg, #0d9488, #0e7490) !important;
-  border-color: transparent !important;
-  color: #fff !important;
-  box-shadow: 0 8px 20px rgba(13, 148, 136, 0.3);
-}
-:deep(.lp-btn-teal:hover) {
-  background: linear-gradient(120deg, #0f766e, #155e75) !important;
-}
-
-:deep(.lp-btn-light) {
-  background: rgba(255, 255, 255, 0.16) !important;
-  border-color: rgba(255, 255, 255, 0.4) !important;
-  color: #fff !important;
-}
-:deep(.lp-btn-light:hover) {
-  background: rgba(255, 255, 255, 0.26) !important;
-}
-
-.lp-highlights {
-  display: flex;
-  gap: 36px;
-  margin-top: 40px;
-  flex-wrap: wrap;
-}
-
-.lp-highlight { display: flex; flex-direction: column; }
-.lp-highlight strong { font-size: 26px; font-weight: 800; letter-spacing: -0.5px; }
-.lp-highlight span { font-size: 13px; color: #64748b; }
-
-
-/* ---------- Hero art (floating cards) ---------- */
-.lp-hero-art {
-  position: relative;
-  height: 420px;
-}
-
-.lp-card-float {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px 18px;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.95);
-  border: 1px solid #eef2f7;
-  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.12);
-  animation: lp-float 6s ease-in-out infinite;
-}
-.lp-card-float strong { display: block; font-size: 14px; color: #0f172a; }
-.lp-card-float span { font-size: 12px; color: #64748b; }
-
-.lp-card-float--1 { top: 20px; left: 6%; animation-delay: 0s; }
-.lp-card-float--2 { top: 150px; right: 2%; animation-delay: 1.2s; }
-.lp-card-float--3 { bottom: 20px; left: 16%; animation-delay: 2.4s; }
-
-.lp-fc-icon {
-  width: 46px;
-  height: 46px;
-  border-radius: 14px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-}
-.lp-fc-icon.blue { background: #eff6ff; color: #2563eb; }
-.lp-fc-icon.teal { background: #f0fdfa; color: #0d9488; }
-.lp-fc-icon.amber { background: #fffbeb; color: #d97706; }
-
-@keyframes lp-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-12px); }
-}
-
-/* ---------- Sections ---------- */
-.lp-section { padding: 76px 24px; }
-.lp-section--tint { background: #fff; }
-
-.lp-section-head {
-  max-width: 640px;
-  margin: 0 auto 44px;
-  text-align: center;
-}
-
-.lp-eyebrow {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 1.4px;
-  color: #0d9488;
-  margin-bottom: 10px;
-}
-
-.lp-section-head h2 {
-  margin: 0 0 12px;
-  font-size: 34px;
-  font-weight: 800;
-  letter-spacing: -0.8px;
-}
-.lp-section-head p { margin: 0; font-size: 16px; color: #64748b; }
-
-/* ---------- Features ---------- */
-.lp-feature-grid {
-  max-width: 1100px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 20px;
-}
-
-.lp-feature {
-  padding: 26px 22px;
-  border-radius: 20px;
-  background: #fff;
-  border: 1px solid #eef2f7;
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
-  transition: transform 0.15s, box-shadow 0.15s;
-}
-.lp-feature:hover { transform: translateY(-4px); box-shadow: 0 16px 36px rgba(15, 23, 42, 0.1); }
-
-.lp-feature-icon {
-  width: 50px;
-  height: 50px;
-  border-radius: 15px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  margin-bottom: 16px;
-}
-.lp-feature-icon.accent-blue { background: #eff6ff; color: #2563eb; }
-.lp-feature-icon.accent-teal { background: #f0fdfa; color: #0d9488; }
-.lp-feature-icon.accent-amber { background: #fffbeb; color: #d97706; }
-.lp-feature-icon.accent-purple { background: #f5f3ff; color: #7c3aed; }
-
-.lp-feature h3 { margin: 0 0 8px; font-size: 17px; font-weight: 700; }
-.lp-feature p { margin: 0; font-size: 14px; color: #64748b; line-height: 1.55; }
-
-/* ---------- Steps ---------- */
-.lp-steps {
-  max-width: 1000px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-}
-
-.lp-step {
-  padding: 28px 24px;
-  border-radius: 20px;
-  background: #f8fafc;
-  border: 1px solid #eef2f7;
-  text-align: center;
-}
-.lp-step-n {
-  width: 52px;
-  height: 52px;
-  border-radius: 16px;
-  margin: 0 auto 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 22px;
-  font-weight: 800;
-  color: #fff;
-  background: linear-gradient(135deg, #0d9488, #0e7490);
-}
-.lp-step h3 { margin: 0 0 8px; font-size: 18px; font-weight: 700; }
-.lp-step p { margin: 0; font-size: 14px; color: #64748b; }
-
-
-/* ---------- CTA band ---------- */
-.lp-cta-band { padding: 20px 24px 76px; }
-
-.lp-cta-card {
-  max-width: 900px;
-  margin: 0 auto;
-  padding: 52px 40px;
-  border-radius: 28px;
-  text-align: center;
-  color: #fff;
-  background: linear-gradient(120deg, #0f766e 0%, #0d9488 50%, #2563eb 130%);
-  box-shadow: 0 24px 56px rgba(13, 118, 110, 0.32);
-}
-
-.lp-cta-card h2 { margin: 0 0 12px; font-size: 32px; font-weight: 800; letter-spacing: -0.6px; }
-.lp-cta-card p { margin: 0 0 28px; font-size: 16px; color: rgba(255, 255, 255, 0.9); }
-
-.lp-cta-actions { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-
-/* ---------- Footer ---------- */
-.lp-footer {
-  padding: 32px 24px;
-  border-top: 1px solid #e8eef5;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.lp-footer-brand { display: flex; align-items: center; gap: 10px; font-weight: 800; }
-.lp-footer-brand .lp-brand-mark { width: 32px; height: 32px; font-size: 16px; border-radius: 9px; }
-.lp-footer p { margin: 0; font-size: 13px; color: #94a3b8; }
-
-.lp-footer-links { display: flex; gap: 20px; align-items: center; }
-.lp-footer-links a, .lp-footer-links button {
-  font-size: 13px;
-  color: #64748b;
-  text-decoration: none;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-weight: 600;
-}
-.lp-footer-links a:hover, .lp-footer-links button:hover { color: #0d9488; }
-
-/* ---------- Responsive ---------- */
-@media (max-width: 900px) {
-  .lp-hero-inner { grid-template-columns: 1fr; }
-  .lp-hero-art { display: none; }
-  .lp-hero-copy h1 { font-size: 40px; }
-  .lp-feature-grid { grid-template-columns: repeat(2, 1fr); }
-  .lp-steps { grid-template-columns: 1fr; }
-}
-
-@media (max-width: 640px) {
-  .lp-nav-links {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    flex-direction: column;
-    gap: 0;
-    padding: 8px 24px 16px;
-    background: #fff;
-    border-bottom: 1px solid #e8eef5;
-    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
-    display: none;
-  }
-  .lp-nav-links.is-open { display: flex; }
-  .lp-nav-links a { padding: 12px 0; }
-  .lp-burger { display: flex; }
-  .lp-cta { display: none; }
-  .lp-hero { padding: 48px 20px 64px; }
-  .lp-hero-copy h1 { font-size: 34px; }
-  .lp-section { padding: 56px 20px; }
-  .lp-section-head h2 { font-size: 26px; }
-  .lp-feature-grid { grid-template-columns: 1fr; }
-  .lp-cta-card { padding: 40px 24px; }
-  .lp-cta-card h2 { font-size: 26px; }
-  .lp-footer { justify-content: center; text-align: center; }
-}
+.landing { min-height: 100vh; background: #f4f7fb; color: #0f172a; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+.land-nav { position: sticky; top: 0; z-index: 50; background: rgba(255,255,255,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid #e2e8f0; }
+.land-nav-inner { max-width: 1100px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.land-brand { display: flex; align-items: center; gap: 10px; }
+.land-mark { width: 34px; height: 34px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 18px; background: linear-gradient(135deg, #0d9488, #0e7490); }
+.land-name { font-size: 18px; font-weight: 900; letter-spacing: -0.5px; }
+.land-links { display: flex; align-items: center; gap: 24px; }
+.land-link { color: #475569; text-decoration: none; font-size: 14px; font-weight: 600; }
+.land-link:hover { color: #0d9488; }
+.land-actions { display: flex; align-items: center; gap: 10px; }
+.land-btn-primary { background: #0d9488 !important; color: #fff !important; }
+.land-btn-secondary { background: #fff !important; border: 1px solid #e2e8f0 !important; color: #0f172a !important; }
+.land-hero { padding: 80px 24px 60px; position: relative; overflow: hidden; }
+.land-hero::before { content: ''; position: absolute; top: -10%; right: -10%; width: 600px; height: 600px; border-radius: 50%; background: #e0f2fe; filter: blur(100px); z-index: -1; }
+.land-hero-inner { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: 1fr 460px; gap: 50px; align-items: center; }
+.land-hero-kicker { display: inline-block; font-size: 12px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; color: #0d9488; margin-bottom: 12px; }
+.land-hero-title { font-size: clamp(40px, 7vw, 64px); font-weight: 900; line-height: 1.1; letter-spacing: -1px; margin: 0 0 18px; }
+.land-title-highlight { color: #0d9488; }
+.land-hero-desc { font-size: 18px; color: #475569; margin: 0 0 28px; line-height: 1.7; max-width: 520px; }
+.land-hero-actions { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 24px; }
+.land-btn-hero { padding: 14px 28px !important; font-size: 16px !important; font-weight: 800 !important; }
+.land-hero-trust { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #64748b; font-weight: 600; }
+.land-trust-dot { width: 8px; height: 8px; border-radius: 50%; background: #0d9488; display: inline-block; }
+.land-visual-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 24px; padding: 32px; box-shadow: 0 20px 50px rgba(15, 23, 42, 0.1); display: flex; flex-direction: column; gap: 20px; }
+.land-visual-icon { font-size: 48px; margin-bottom: 8px; }
+.land-visual-box { display: flex; align-items: center; gap: 14px; padding: 16px; background: #f0fdfa; border-radius: 14px; border: 1px dashed #99f6e4; }
+.land-visual-box--small { margin-left: auto; width: 45%; }
+.land-stat { font-size: 22px; font-weight: 900; color: #0d9488; }
+.land-stat.big { font-size: 32px; }
+.land-stat-label { font-size: 13px; color: #64748b; }
+.land-section { padding: 70px 24px; }
+.land-section-inner { max-width: 1100px; margin: 0 auto; }
+.land-section-head { text-align: center; margin-bottom: 40px; }
+.land-section-title { font-size: 28px; font-weight: 900; margin: 0 0 12px; letter-spacing: -0.5px; }
+.land-section-sub { font-size: 16px; color: #64748b; margin: 0; }
+.land-feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; }
+.land-feature-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 28px; transition: transform 0.2s, border-color 0.2s; }
+.land-feature-card:hover { border-color: #0d9488; transform: translateY(-4px); }
+.land-feature-icon { font-size: 32px; margin-bottom: 14px; display: block; }
+.land-feature-title { font-size: 17px; font-weight: 800; margin: 0 0 10px; }
+.land-feature-desc { font-size: 14px; color: #64748b; margin: 0; line-height: 1.6; }
+.land-step-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px; }
+.land-step-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 32px 24px; display: flex; flex-direction: column; gap: 14px; }
+.land-step-num { width: 40px; height: 40px; border-radius: 50%; background: #0d9488; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 900; }
+.land-step-title { font-size: 16px; font-weight: 800; margin: 0; }
+.land-step-desc { font-size: 14px; color: #64748b; margin: 0; line-height: 1.6; }
+.land-specialty-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.land-specialty-chip { padding: 10px 20px; border: 1px solid #e2e8f0; border-radius: 999px; background: #fff; color: #475569; font-size: 14px; font-weight: 600; }
+.land-specialty-chip:hover { border-color: #0d9488; color: #0d9488; background: #f0fdfa; }
+.land-footer { border-top: 1px solid #e2e8f0; margin-top: 60px; padding: 40px 24px; background: #fff; }
+.land-footer-inner { max-width: 1100px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 24px; flex-wrap: wrap; }
+.land-footer-brand { display: flex; align-items: center; gap: 10px; }
+.land-footer-copy { font-size: 13px; color: #64748b; margin: 0; }
+@media (max-width: 900px) { .land-hero-inner { grid-template-columns: 1fr; gap: 40px; } .land-visual-card { display: none; } }
+@media (max-width: 600px) { .land-hero { padding: 50px 16px 30px; } .land-section { padding: 40px 16px; } .land-footer-inner { flex-direction: column; text-align: center; align-items: center; gap: 16px; } }
 </style>
-

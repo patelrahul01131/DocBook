@@ -21,6 +21,7 @@ import MedicineCatalog from '../portals/patient/MedicineCatalog.vue'
 
 // Doctor portal
 import DoctorDashboard from '../portals/doctor/DoctorDashboard.vue'
+import DoctorQueue from '../portals/doctor/DoctorQueue.vue'
 import DoctorAppointments from '../portals/doctor/DoctorAppointments.vue'
 import DoctorPatients from '../portals/doctor/DoctorPatients.vue'
 import ConsultationForm from '../portals/doctor/ConsultationForm.vue'
@@ -30,6 +31,9 @@ import Referrals from '../portals/doctor/Referrals.vue'
 import Reports from '../portals/patient/Reports.vue'
 
 // Receptionist + Laboratory portals
+import ReceptionistToday from '../portals/receptionist/ReceptionistToday.vue'
+import ReceptionistPatients from '../portals/receptionist/ReceptionistPatients.vue'
+import ReceptionistCheckin from '../portals/receptionist/ReceptionistCheckin.vue'
 import QueueDashboard from '../portals/receptionist/QueueDashboard.vue'
 import LabWorklist from '../portals/lab/LabWorklist.vue'
 
@@ -55,6 +59,8 @@ const routes = [
 
   // Doctor routes
   { path: '/doctor', component: DoctorDashboard, meta: { auth: true } },
+  { path: '/doctor/queue', component: DoctorQueue, meta: { auth: true } },
+  { path: '/doctor-queue', redirect: '/doctor/queue' },
   { path: '/doctor-appointments', component: DoctorAppointments, meta: { auth: true } },
   { path: '/doctor-patients', component: DoctorPatients, meta: { auth: true } },
   { path: '/consultation/:id', component: ConsultationForm, meta: { auth: true } },
@@ -64,7 +70,11 @@ const routes = [
   { path: '/reports', component: Reports, meta: { auth: true } },
 
   // Receptionist + Laboratory
-  { path: '/receptionist', component: QueueDashboard, meta: { auth: true } },
+  { path: '/receptionist', component: ReceptionistToday, meta: { auth: true } },
+  { path: '/receptionist/today', redirect: '/receptionist' },
+  { path: '/receptionist/patients', component: ReceptionistPatients, meta: { auth: true } },
+  { path: '/receptionist/checkin', component: ReceptionistCheckin, meta: { auth: true } },
+  { path: '/receptionist/queue', redirect: '/receptionist' },
   { path: '/laboratory', component: LabWorklist, meta: { auth: true } },
 
   // Fallback → landing

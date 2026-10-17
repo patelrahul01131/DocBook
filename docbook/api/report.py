@@ -318,3 +318,70 @@ def mark_report_reviewed(report):
 	return {"success": True, "status": "Reviewed"}
 
 
+# ---------------------------------------------------------------------------
+# Update / Delete (doctor / admin)
+# ---------------------------------------------------------------------------
+
+@frappe.whitelist()
+def update_report(report, title=None, report_type=None, description=None, laboratory=None, findings=None, status=None):
+	"""Doctor or admin updates an existing report record."""
+	require_login()
+	doctor = current_doctor()
+	row = _report_or_throw(report)
+
+	if not is_admin() and (not doctor or doctor != row.ordered_by):
+		frappe.throw(_("Not authorized to modify this report"), frappe.PermissionError)
+
+	updates = {}
+	if title is not None:
+		if not str(title).strip():
+			frappe.throw(_("Title cannot be empty"))
+		updates["title"] = str(title).strip()
+	if report_type is not None:
+		if report_type not in REPORT_TYPES:
+			frappe.throw(_("Invalid report type"))
+		updates["report_type"] = report_type
+	if description is not None:
+		updates["description"] = description
+	if laboratory is not None:
+		updates["laboratory"] = laboratory
+	if findings is not None:
+		updates["findings"] = findings
+	if status is not None:
+		updates["status"] = status
+
+	if updates:
+		frappe.db.set_value("Patient Report", report, updates)
+		frappe.db.commit()
+
+	return {"success": True, "report": report}
+
+
+@frappe.whitelist()
+def delete_report(report):
+	"""Doctor or admin deletes a report."""
+	require_login()
+	doctor = current_doctor()
+	row = _report_or_throw(report)
+
+	if not is_admin() and (not doctor or doctor != row.ordered_by):
+		frappe.throw(_("Not authorized to delete this report"), frappe.PermissionError)
+
+	frappe.delete_doc("Patient Report", report, ignore_permissions=True)
+
+	# If appointment was in 'Report Pending' and no other pending reports exist, revert stage
+	if row.appointment:
+		other_reports = frappe.get_all(
+			"Patient Report",
+			filters={"appointment": row.appointment, "status": ["in", ["Ordered", "Pending"]]},
+			limit=1
+		)
+		if not other_reports:
+			curr_stage = frappe.db.get_value("Appointment", row.appointment, "visit_stage")
+			if curr_stage == "Report Pending":
+				frappe.db.set_value("Appointment", row.appointment, "visit_stage", "In Consultation")
+
+	frappe.db.commit()
+	return {"success": True, "report": report}
+
+

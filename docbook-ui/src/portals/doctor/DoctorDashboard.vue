@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Badge, Button } from 'frappe-ui'
 import { call } from '../../api'
@@ -166,8 +166,62 @@ function go(path) {
   router.push(path)
 }
 
+// ---------------------------------------------------------------
+// Live queue: call the next patient into consultation
+// ---------------------------------------------------------------
+const queueData = ref(null)
+const queueLoading = ref(false)
+const callingNext = ref(false)
+const queueError = ref('')
+let queuePoll = null
+
+const waitingList = computed(() => {
+  const q = queueData.value?.queue || []
+  return q.filter((r) => r.visit_stage !== 'In Consultation')
+})
+
+async function fetchQueue(isQuiet = false) {
+  if (!isQuiet) queueLoading.value = true
+  try {
+    queueData.value = await call('docbook.api.queue.get_queue', {})
+    queueError.value = ''
+  } catch (err) {
+    if (!isQuiet) queueError.value = err?.message || 'Unable to load the queue.'
+  } finally {
+    queueLoading.value = false
+  }
+}
+
+async function callNextPatient() {
+  if (callingNext.value) return
+  callingNext.value = true
+  queueError.value = ''
+  try {
+    const res = await call('docbook.api.queue.call_next_patient', {})
+    if (res?.called) {
+      await fetchQueue(true)
+      // The called patient is automatically in consultation — open their form.
+      router.push(`/consultation/${res.called}`)
+      return
+    }
+    queueError.value = res?.message || 'No patients waiting.'
+  } catch (err) {
+    queueError.value = err?.message || 'Unable to call the next patient.'
+  } finally {
+    callingNext.value = false
+  }
+}
+
 onMounted(() => {
   fetchDashboard()
+  fetchQueue()
+  queuePoll = setInterval(() => {
+    fetchQueue(true)
+  }, 30000)
+})
+
+onUnmounted(() => {
+  if (queuePoll) clearInterval(queuePoll)
 })
 </script>
 
@@ -240,6 +294,36 @@ onMounted(() => {
       </section>
 
       <template v-else>
+        <!-- ============ Live Queue Call-Next Banner ============ -->
+        <section class="dd-queue-banner">
+          <div class="dd-qb-left">
+            <span class="dd-qb-pulse">●</span>
+            <div>
+              <h3>Live Patient Queue &amp; Consultation</h3>
+              <p>
+                <strong v-if="waitingList.length">{{ waitingList.length }} patient{{ waitingList.length === 1 ? '' : 's' }} waiting in your queue</strong>
+                <span v-else>Waiting room is clear</span>
+                <template v-if="queueData?.now_serving"> · Currently serving: {{ queueData.now_serving.patient_name || queueData.now_serving.patient }}</template>
+              </p>
+            </div>
+          </div>
+          <div class="dd-qb-actions">
+            <button
+              class="dd-btn-call-next"
+              :disabled="callingNext"
+              @click="callNextPatient"
+            >
+              📣 {{ callingNext ? 'Calling…' : 'Call Next Patient' }}
+            </button>
+            <button
+              class="dd-btn-queue-view"
+              @click="router.push('/doctor/queue')"
+            >
+              Open Full Queue →
+            </button>
+          </div>
+        </section>
+
         <!-- ============ Stat cards ============ -->
         <section class="dd-stats">
           <article class="dd-stat dd-stat--blue">
@@ -585,6 +669,73 @@ onMounted(() => {
 .dd-error-copy { flex: 1; min-width: 0; }
 .dd-error-copy strong { display: block; font-size: 14px; }
 .dd-error-copy p { margin: 2px 0 0; font-size: 13px; }
+
+/* ---------- Live Queue Banner ---------- */
+.dd-queue-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  background: #ffffff;
+  border: 2px solid #86efac;
+  border-radius: 18px;
+  padding: 18px 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 4px 16px rgba(5, 150, 105, 0.08);
+}
+.dd-qb-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.dd-qb-pulse {
+  color: #10b981;
+  font-size: 20px;
+  animation: pulse-dot 1.2s infinite;
+}
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.dd-qb-left h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 800;
+  color: #0f172a;
+}
+.dd-qb-left p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: #64748b;
+}
+.dd-qb-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.dd-btn-call-next {
+  background: #059669;
+  color: #ffffff;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: 0 2px 8px rgba(5,150,105,0.25);
+}
+.dd-btn-call-next:hover { background: #047857; }
+.dd-btn-call-next:disabled { opacity: 0.6; cursor: wait; }
+.dd-btn-queue-view {
+  background: #f8fafc;
+  color: #334155;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.dd-btn-queue-view:hover { background: #e2e8f0; }
 
 /* ---------- Stats ---------- */
 .dd-stats {

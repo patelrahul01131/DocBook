@@ -13,6 +13,7 @@
   "source_appointment",
   "target_appointment",
   "status",
+  "referral_type",
   "reason",
   "clinical_notes",
   "referral_date",
@@ -25,6 +26,13 @@
    "fieldtype": "Link",
    "label": "Patient",
    "options": "Patient Profile",
+   "reqd": 1
+  },
+  {
+   "fieldname": "referral_type",
+   "fieldtype": "Select",
+   "label": "Referral Type",
+   "options": "Regular Checkup\nReferral\nFast Track Referral",
    "reqd": 1
   },
   {
@@ -115,6 +123,54 @@
    "role": "System Manager",
    "share": 1,
    "write": 1
+  },
+  {
+   "role": "Receptionist",
+   "read": 1,
+   "write": 0,
+   "create": 0,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "print": 1,
+   "email": 1,
+   "export": 0,
+   "share": 0,
+   "import": 0,
+   "set_user_permissions": 0
+  },
+  {
+   "role": "Doctor",
+   "read": 1,
+   "write": 1,
+   "create": 1,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "print": 1,
+   "email": 1,
+   "export": 0,
+   "share": 0,
+   "import": 0,
+   "set_user_permissions": 0
+  },
+  {
+   "role": "Patient",
+   "read": 1,
+   "write": 0,
+   "create": 0,
+   "submit": 0,
+   "cancel": 0,
+   "delete": 0,
+   "amend": 0,
+   "print": 1,
+   "email": 1,
+   "export": 0,
+   "share": 0,
+   "import": 0,
+   "set_user_permissions": 0
   }
  ],
  "row_format": "Dynamic",

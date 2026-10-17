@@ -470,71 +470,75 @@ onMounted(() => {
 
           <!-- Actions Footer -->
           <div class="card-actions">
-            <button
-              class="btn-primary"
-              @click="openConsultation(appt)"
-            >
-              <span class="lucide-clipboard-pen-line"></span>
-              Consult & Rx
-            </button>
+            <div class="card-actions-primary">
+              <button
+                class="btn-primary"
+                @click="openConsultation(appt)"
+              >
+                <span class="lucide-clipboard-pen-line"></span>
+                Consult & Rx
+              </button>
 
-            <button
-              class="btn-secondary"
-              @click="viewPatientHistory(appt)"
-              title="View Patient Medical History"
-            >
-              <span class="lucide-history"></span>
-              History
-            </button>
+              <!-- Quick Status Toggles -->
+              <button
+                v-if="appt.status === 'Pending'"
+                class="btn-status-confirm"
+                :disabled="updatingStatus === appt.name"
+                @click="updateStatus(appt.name, 'Confirmed')"
+              >
+                ✓ Confirm
+              </button>
 
-            <!-- Edit Button -->
-            <button
-              class="btn-secondary"
-              @click="openEditModal(appt)"
-              title="Edit appointment"
-            >
-              <span class="lucide-pencil"></span>
-              Edit
-            </button>
+              <button
+                v-if="appt.status === 'Confirmed'"
+                class="btn-status-complete"
+                :disabled="updatingStatus === appt.name"
+                @click="updateStatus(appt.name, 'Completed')"
+              >
+                ✓ Complete
+              </button>
 
-            <!-- Delete Button -->
-            <button
-              class="btn-danger-outline"
-              @click="openDeleteModal(appt)"
-              title="Delete appointment"
-            >
-              <span class="lucide-trash-2"></span>
-              Delete
-            </button>
+              <button
+                v-if="['Pending', 'Confirmed'].includes(appt.status)"
+                class="btn-status-cancel"
+                :disabled="updatingStatus === appt.name"
+                @click="updateStatus(appt.name, 'Cancelled')"
+                title="Cancel appointment"
+              >
+                ✕ Cancel
+              </button>
+            </div>
 
-            <!-- Quick Status Toggles -->
-            <button
-              v-if="appt.status === 'Pending'"
-              class="btn-status-confirm"
-              :disabled="updatingStatus === appt.name"
-              @click="updateStatus(appt.name, 'Confirmed')"
-            >
-              ✓ Confirm
-            </button>
+            <div class="card-actions-secondary">
+              <button
+                class="btn-secondary"
+                @click="viewPatientHistory(appt)"
+                title="View Patient Medical History"
+              >
+                <span class="lucide-history"></span>
+                History
+              </button>
 
-            <button
-              v-if="appt.status === 'Confirmed'"
-              class="btn-status-complete"
-              :disabled="updatingStatus === appt.name"
-              @click="updateStatus(appt.name, 'Completed')"
-            >
-              ✓ Complete
-            </button>
+              <!-- Edit Button -->
+              <button
+                class="btn-secondary"
+                @click="openEditModal(appt)"
+                title="Edit appointment"
+              >
+                <span class="lucide-pencil"></span>
+                Edit
+              </button>
 
-            <button
-              v-if="['Pending', 'Confirmed'].includes(appt.status)"
-              class="btn-status-cancel"
-              :disabled="updatingStatus === appt.name"
-              @click="updateStatus(appt.name, 'Cancelled')"
-              title="Cancel appointment"
-            >
-              ✕
-            </button>
+              <!-- Delete Button -->
+              <button
+                class="btn-danger-outline"
+                @click="openDeleteModal(appt)"
+                title="Delete appointment"
+              >
+                <span class="lucide-trash-2"></span>
+                Delete
+              </button>
+            </div>
           </div>
         </article>
       </div>
@@ -1077,11 +1081,25 @@ onMounted(() => {
 /* Card Actions */
 .card-actions {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
   margin-top: auto;
-  padding-top: 10px;
+  padding-top: 12px;
   border-top: 1px solid #f1f5f9;
+  width: 100%;
+}
+
+.card-actions-primary,
+.card-actions-secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.card-actions-secondary {
+  justify-content: flex-end;
 }
 
 .btn-primary {
@@ -1098,6 +1116,7 @@ onMounted(() => {
   border: none;
   cursor: pointer;
   flex: 1;
+  min-width: 120px;
   transition: all 0.15s;
 }
 
@@ -1118,6 +1137,7 @@ onMounted(() => {
   border: 1px solid #e2e8f0;
   color: #475569;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .btn-secondary:hover {
@@ -1138,6 +1158,7 @@ onMounted(() => {
   color: #c53030;
   cursor: pointer;
   transition: all 0.15s;
+  white-space: nowrap;
 }
 
 .btn-danger-outline:hover {
@@ -1146,6 +1167,8 @@ onMounted(() => {
 }
 
 .btn-status-confirm {
+  display: inline-flex;
+  align-items: center;
   padding: 8px 12px;
   border-radius: 10px;
   font-size: 12px;
@@ -1154,11 +1177,14 @@ onMounted(() => {
   border: 1px solid #a7f3d0;
   color: #047857;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .btn-status-confirm:hover { background: #d1fae5; }
 
 .btn-status-complete {
+  display: inline-flex;
+  align-items: center;
   padding: 8px 12px;
   border-radius: 10px;
   font-size: 12px;
@@ -1167,12 +1193,15 @@ onMounted(() => {
   border: 1px solid #bfdbfe;
   color: #1e40af;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .btn-status-complete:hover { background: #dbeafe; }
 
 .btn-status-cancel {
-  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
   border-radius: 10px;
   font-size: 12px;
   font-weight: 700;
@@ -1180,6 +1209,7 @@ onMounted(() => {
   border: 1px solid #fecaca;
   color: #b91c1c;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .btn-status-cancel:hover { background: #fee2e2; }

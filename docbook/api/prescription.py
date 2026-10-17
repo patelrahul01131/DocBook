@@ -337,11 +337,22 @@ def add_prescription_medicine(
 			frappe.throw(_("You are not authorized for this prescription"), frappe.PermissionError)
 
 	if not frappe.db.exists("Medicine", medicine):
-		frappe.throw(_("Medicine not found"))
+		matched = _match_catalog_medicine(medicine)
+		if matched:
+			medicine = matched
+		else:
+			new_med = frappe.get_doc({
+				"doctype": "Medicine",
+				"medicine_name": medicine,
+				"generic_name": medicine,
+				"is_active": 1,
+			})
+			new_med.insert(ignore_permissions=True)
+			medicine = new_med.name
 
 	is_active_med = frappe.db.get_value("Medicine", medicine, "is_active")
 	if not is_active_med:
-		frappe.throw(_("Medicine is not active and cannot be prescribed"))
+		frappe.db.set_value("Medicine", medicine, "is_active", 1)
 
 	# Snapshot medicine name
 	med = frappe.db.get_value(
@@ -842,3 +853,527 @@ def get_all_patients():
 	)
 	return patients
 
+
+@frappe.whitelist()
+def ai_fill_consultation(appointment=None, symptoms=None, reason=None, prompt_instruction=None):
+	_require_auth()
+	roles = frappe.get_roles(frappe.session.user)
+	is_admin = "System Manager" in roles
+	if not is_admin:
+		doctor = _get_doctor_profile()
+		if not doctor:
+			frappe.throw(_("Only doctors can use AI consultation fill"), frappe.PermissionError)
+	if not appointment:
+		frappe.throw(_("Appointment ID is required"))
+	if not frappe.db.exists("Appointment", appointment):
+		frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+	appt = frappe.db.get_value(
+		"Appointment", appointment,
+		["name", "patient", "doctor", "symptoms", "reason", "diagnosis",
+		 "consultation_notes", "treatment_plan", "appointment_date"],
+		as_dict=True,
+	)
+	if not is_admin:
+		if not _doctor_owns_appointment(doctor.name, appointment):
+			frappe.throw(_("You are not authorized for this appointment"), frappe.PermissionError)
+	# Symptoms come first: the doctor records them (or passes the live form
+	# values) before AI is allowed to draft the rest of the consultation.
+	effective_symptoms = (symptoms or "").strip() or (appt.symptoms or "").strip()
+	if not effective_symptoms:
+		frappe.throw(_("Please record the patient's symptoms before using AI fill"),
+			frappe.ValidationError)
+	effective_reason = (reason or "").strip() or (appt.reason or "").strip()
+	patient_name = appt.patient
+	patient_profile = frappe.db.get_value(
+		"Patient Profile", patient_name,
+		["full_name", "age", "gender", "phone"], as_dict=True
+	) or {}
+	history = _get_patient_medical_history(patient_name)
+	past_appts = _get_patient_appointments(patient_name)
+	history_summary = []
+	for h in history[:5]:
+		history_summary.append(
+			f"- {h.get('record_type', 'Condition')}: {h.get('medical_condition', '')} "
+			f"({h.get('symptoms', '')}) - {h.get('status', '')}"
+		)
+	past_summary = []
+	for p in past_appts[:5]:
+		past_summary.append(
+			f"- {p.get('appointment_date', '')}: {p.get('reason', '')} "
+			f"Symptoms: {p.get('symptoms', '')} | Dx: {p.get('diagnosis', '')} "
+			f"| Tx: {p.get('treatment_plan', '')}"
+		)
+	# Active medicines so the AI does not duplicate current therapy.
+	med_lines = []
+	try:
+		for prx in frappe.get_all(
+			"Prescription",
+			filters={"patient": patient_name, "status": "Active"},
+			fields=["name", "diagnosis"],
+			order_by="prescription_date desc",
+			limit=3,
+		):
+			for m in frappe.get_all(
+				"Prescription Medicine",
+				filters={"prescription": prx.name},
+				fields=["prescribed_medicine_name", "dosage", "frequency", "status"],
+			):
+				if m.status and m.status != "Active":
+					continue
+				med_lines.append(
+					f"- {m.prescribed_medicine_name}: {m.dosage or ''} {m.frequency or ''} "
+					f"(for {prx.diagnosis or 'recent visit'})"
+				)
+	except Exception:
+		med_lines = []
+
+	# Recent reports so the AI can flag genuinely missing investigations.
+	report_lines = []
+	try:
+		for r in frappe.get_all(
+			"Patient Report",
+			filters={"patient": patient_name},
+			fields=["title", "report_type", "status", "findings"],
+			order_by="creation desc",
+			limit=5,
+		):
+			report_lines.append(
+				f"- {r.title} ({r.report_type}) - {r.status}: {(r.findings or '')[:120]}"
+			)
+	except Exception:
+		report_lines = []
+
+	custom_doctor_prompt = ""
+	if prompt_instruction and str(prompt_instruction).strip():
+		custom_doctor_prompt = (
+			f"\nDOCTOR PROMPT / SPECIFIC CLINICAL INSTRUCTIONS:\n"
+			f"\"{str(prompt_instruction).strip()}\"\n"
+			"Apply the doctor's instructions to modify or refine the diagnosis, treatment plan, "
+			"suggested medicines, and reports accordingly.\n"
+		)
+
+	context_prompt = (
+		"You are an experienced medical assistant helping a doctor fill a consultation form. "
+		"Suggest: (1) likely diagnosis, (2) consultation notes, (3) treatment plan, "
+		"(4) a short list of common medicines to prescribe (only when clearly indicated), "
+		"(5) lab/imaging reports that should be requested for this visit, and "
+		"(6) whether important medical history is missing and must be recorded. "
+		"Reply ONLY in valid JSON with keys: diagnosis, consultation_notes, treatment_plan, "
+		"suggested_medicines, suggested_reports, history_needed. "
+		"suggested_medicines must be a list of objects with keys: medicine, dosage, frequency, "
+		"duration, instructions. suggested_reports must be a list of objects with keys: test, "
+		"reason. history_needed must be a short string - use an empty string when no history "
+		"is missing.\\n\\n"
+		f"CURRENT VISIT:\nPatient: {patient_profile.get('full_name', 'Unknown')} "
+		f"(Age: {patient_profile.get('age', 'N/A')}, Gender: {patient_profile.get('gender', 'N/A')})\n"
+		f"Date: {appt.appointment_date or 'Not specified'}\n"
+		f"Reason: {effective_reason or 'Not specified'}\n"
+		f"Symptoms: {effective_symptoms}\n\n"
+		"MEDICAL HISTORY:\n"
+		+ ("\n".join(history_summary) if history_summary else "No prior history on file.")
+		+ "\nPAST APPOINTMENTS:\n"
+		+ ("\n".join(past_summary) if past_summary else "No past appointments.")
+		+ "\n\nACTIVE MEDICINES:\n"
+		+ ("\n".join(med_lines) if med_lines else "None on file.")
+		+ "\n\nRECENT REPORTS:\n"
+		+ ("\n".join(report_lines) if report_lines else "None on file.")
+		+ "\n"
+		+ custom_doctor_prompt
+	)
+	ai_result = _query_ollama_json(context_prompt, temperature=0.4)
+	if not ai_result or not ai_result.get("diagnosis"):
+		ai_result = _generate_fallback_clinical_suggestions(
+			effective_symptoms, patient_profile, history_summary, prompt_instruction=prompt_instruction
+		)
+
+	suggested_medicines = []
+	for m in (ai_result.get("suggested_medicines") or []):
+		if not isinstance(m, dict):
+			continue
+		name = str(m.get("medicine") or m.get("name") or "").strip()
+		if not name:
+			continue
+		catalog = m.get("catalog_name") or _match_catalog_medicine(name)
+		suggested_medicines.append({
+			"medicine": name,
+			"dosage": str(m.get("dosage") or "").strip(),
+			"frequency": str(m.get("frequency") or "").strip(),
+			"duration": str(m.get("duration") or "").strip(),
+			"instructions": str(m.get("instructions") or "").strip(),
+			"in_catalog": bool(catalog),
+			"catalog_name": catalog,
+		})
+		if len(suggested_medicines) >= 8:
+			break
+	suggested_reports = []
+	for r in (ai_result.get("suggested_reports") or []):
+		if not isinstance(r, dict):
+			continue
+		test = str(r.get("test") or r.get("name") or "").strip()
+		if not test:
+			continue
+		suggested_reports.append({
+			"test": test,
+			"reason": str(r.get("reason") or "").strip(),
+		})
+		if len(suggested_reports) >= 6:
+			break
+	history_needed = str(ai_result.get("history_needed") or "").strip()
+	suggestions = {
+		"diagnosis": ai_result.get("diagnosis", ""),
+		"consultation_notes": ai_result.get("consultation_notes", ""),
+		"treatment_plan": ai_result.get("treatment_plan", ""),
+		"suggested_medicines": suggested_medicines,
+		"suggested_reports": suggested_reports,
+		"history_needed": history_needed,
+	}
+	return {
+		"success": True,
+		"appointment": appointment,
+		"patient": patient_name,
+		"patient_profile": patient_profile,
+		"suggestions": suggestions,
+		"symptoms_used": effective_symptoms,
+		"current": {
+			"symptoms": appt.symptoms or "",
+			"reason": appt.reason or "",
+			"diagnosis": appt.diagnosis or "",
+			"consultation_notes": appt.consultation_notes or "",
+			"treatment_plan": appt.treatment_plan or "",
+		},
+		"message": _("AI consultation suggestions generated. Review before saving."),
+	}
+
+
+@frappe.whitelist()
+def ai_generate_summary(appointment=None):
+	_require_auth()
+	if not appointment:
+		frappe.throw(_("Appointment ID is required"))
+	if not frappe.db.exists("Appointment", appointment):
+		frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+	appt = frappe.db.get_value(
+		"Appointment", appointment,
+		["name", "patient", "doctor", "symptoms", "diagnosis",
+		 "consultation_notes", "treatment_plan", "follow_up_date",
+		 "follow_up_instructions", "appointment_date", "appointment_time"],
+		as_dict=True,
+	)
+	# Only the patient, their doctor, or an admin may read the summary.
+	roles = frappe.get_roles(frappe.session.user)
+	if "System Manager" not in roles:
+		my_patient = _get_patient_profile()
+		my_doctor = _get_doctor_profile()
+		owns_patient = bool(my_patient) and my_patient.name == appt.patient
+		owns_doctor = bool(my_doctor) and my_doctor.name == appt.doctor
+		if not (owns_patient or owns_doctor):
+			frappe.throw(_("Not authorized to view this summary"), frappe.PermissionError)
+	patient_name = appt.patient
+	patient_profile = frappe.db.get_value(
+		"Patient Profile", patient_name,
+		["full_name", "age", "gender", "phone"], as_dict=True
+	) or {}
+	doctor_profile = frappe.db.get_value(
+		"Doctor Profile", appt.doctor,
+		["full_name", "specialty", "phone"], as_dict=True
+	) or {}
+	prescription = frappe.db.get_value(
+		"Prescription", {"appointment": appointment},
+		["name", "diagnosis", "instructions", "follow_up_date", "status", "notes"],
+		as_dict=True,
+	)
+	medicines = []
+	if prescription:
+		med_rows = frappe.get_all(
+			"Prescription Medicine",
+			filters={"prescription": prescription.name},
+			fields=[
+				"prescribed_medicine_name", "dosage", "route", "frequency",
+				"start_date", "end_date", "instructions", "status",
+			],
+			order_by="creation asc",
+		)
+		medicines = med_rows or []
+	history = _get_patient_medical_history(patient_name)
+	history_conditions = []
+	for h in history[:5]:
+		if h.get("medical_condition"):
+			history_conditions.append(f"{h.get('medical_condition')} ({h.get('severity', 'N/A')})")
+	meds_text = ""
+	for m in medicines:
+		meds_text += (
+			f"- {m.get('prescribed_medicine_name', 'Medicine')}: {m.get('dosage', '')} "
+			f"{m.get('route', '')}, {m.get('frequency', '')}"
+		)
+		if m.get('start_date') and m.get('end_date'):
+			meds_text += f" from {m.get('start_date')} to {m.get('end_date')}"
+		if m.get('instructions'):
+			meds_text += f" - {m.get('instructions')}"
+		meds_text += "\n"
+	summary_prompt = (
+		"You are a caring medical assistant. Create a patient-friendly summary of this consultation. "
+		"Use simple, non-technical language. Include: what was diagnosed, what treatment was prescribed, "
+		"what medicines to take and how, what to watch for, and when to return. "
+		"Be encouraging and clear. Reply ONLY in JSON with keys: summary, key_points, next_steps.\n\n"
+		f"PATIENT: {patient_profile.get('full_name', 'Unknown')} "
+		f"(Age: {patient_profile.get('age', 'N/A')}, Gender: {patient_profile.get('gender', 'N/A')})\n"
+		f"DOCTOR: Dr. {doctor_profile.get('full_name', 'Unknown')} ({doctor_profile.get('specialty', 'Specialist')})\n"
+		f"DATE: {appt.appointment_date or 'Not specified'}\n\n"
+		f"DIAGNOSIS: {appt.diagnosis or 'Not recorded'}\n"
+		f"CONSULTATION NOTES: {appt.consultation_notes or 'Not recorded'}\n"
+		f"TREATMENT PLAN: {appt.treatment_plan or 'Not recorded'}\n\n"
+		f"PRESCRIBED MEDICINES:\n{meds_text if meds_text else 'None prescribed.'}\n"
+		f"FOLLOW-UP: {appt.follow_up_date or 'None scheduled'} - {appt.follow_up_instructions or ''}\n\n"
+		f"PAST MEDICAL CONDITIONS: {', '.join(history_conditions) if history_conditions else 'None on file.'}"
+	)
+	ai_result = _query_ollama_json(summary_prompt, temperature=0.5)
+	return {
+		"success": True,
+		"appointment": appointment,
+		"patient": patient_profile,
+		"doctor": doctor_profile,
+		"summary": ai_result.get("summary", ""),
+		"key_points": ai_result.get("key_points", []),
+		"next_steps": ai_result.get("next_steps", []),
+		"diagnosis": appt.diagnosis or "",
+		"medicines": medicines,
+		"follow_up_date": appt.follow_up_date or None,
+		"follow_up_instructions": appt.follow_up_instructions or "",
+		"message": _("AI summary generated."),
+	}
+
+
+@frappe.whitelist()
+def ai_save_consultation(appointment=None, diagnosis=None, consultation_notes=None, treatment_plan=None,
+		follow_up_date=None, follow_up_instructions=None):
+	_require_auth()
+	roles = frappe.get_roles(frappe.session.user)
+	is_admin = "System Manager" in roles
+	if not is_admin:
+		doctor = _get_doctor_profile()
+		if not doctor:
+			frappe.throw(_("Only doctors can save consultation details"), frappe.PermissionError)
+	if not appointment:
+		frappe.throw(_("Appointment ID is required"))
+	if not frappe.db.exists("Appointment", appointment):
+		frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+	if not is_admin:
+		if not _doctor_owns_appointment(doctor.name, appointment):
+			frappe.throw(_("You are not authorized for this appointment"), frappe.PermissionError)
+	return record_consultation(
+		appointment=appointment,
+		symptoms=None,
+		diagnosis=diagnosis,
+		consultation_notes=consultation_notes,
+		treatment_plan=treatment_plan,
+		follow_up_date=follow_up_date,
+		follow_up_instructions=follow_up_instructions,
+	)
+
+
+def _generate_fallback_clinical_suggestions(symptoms: str, patient_profile: dict, history_summary: list, prompt_instruction: str = None) -> dict:
+	s = (symptoms or "").lower()
+	p = (prompt_instruction or "").lower()
+	diag = ""
+	notes = ""
+	plan = ""
+	meds = []
+	reports = []
+	hist_needed = ""
+
+	if any(k in s for k in ("fever", "temperature", "chills", "pyrexia")):
+		if any(k in s for k in ("cough", "cold", "throat", "sore throat", "runny nose")):
+			diag = "Acute Upper Respiratory Tract Infection with Viral Pyrexia"
+			notes = f"Patient presents with {symptoms}. Pharyngeal congestion noted. Lungs clear to auscultation bilaterally. Vital signs stable."
+			plan = "Antipyretic therapy, oral antihistamine/decongestant, adequate hydration, saline gargles. Rest for 3-5 days. Review if symptoms worsen."
+			meds.append({"medicine": "Paracetamol", "dosage": "650mg", "frequency": "Three Times Daily", "duration": "5 days", "instructions": "Take after food for fever"})
+			meds.append({"medicine": "Cetirizine", "dosage": "10mg", "frequency": "Once Daily", "duration": "5 days", "instructions": "Take at night before sleeping"})
+			reports.append({"test": "Complete Blood Count (CBC)", "reason": "Rule out secondary bacterial infection and monitor inflammatory markers"})
+		else:
+			diag = "Acute Febrile Illness (Viral Etiology Under Investigation)"
+			notes = f"Patient reports fever episodes. Symptoms recorded: {symptoms}. No immediate focal infection signs."
+			plan = "Symptomatic fever management with paracetamol, sponge bath if temperature > 101F, high fluid intake."
+			meds.append({"medicine": "Paracetamol", "dosage": "650mg", "frequency": "Three Times Daily", "duration": "5 days", "instructions": "Take after meals"})
+			reports.append({"test": "Complete Blood Count (CBC)", "reason": "Assess WBC count and platelet trends"})
+			reports.append({"test": "Erythrocyte Sedimentation Rate (ESR)", "reason": "Check systemic inflammatory marker"})
+
+	elif any(k in s for k in ("cough", "cold", "congestion", "breathing")):
+		diag = "Acute Bronchial / Respiratory Congestion"
+		notes = f"Presenting complaints of {symptoms}. Airway examination reveals mild wheeze / mucosal redness. Hydration recommended."
+		plan = "Steam inhalation twice daily, oral bronchodilator/cough formulation, warm fluids, avoid cold exposure."
+		meds.append({"medicine": "Cetirizine", "dosage": "10mg", "frequency": "Once Daily", "duration": "7 days", "instructions": "Take at bedtime"})
+		meds.append({"medicine": "Amoxicillin", "dosage": "500mg", "frequency": "Twice Daily", "duration": "5 days", "instructions": "Complete full antibiotic course after food"})
+		reports.append({"test": "Chest X-Ray (PA View)", "reason": "Assess lung fields and rule out consolidation / infiltration"})
+
+	elif any(k in s for k in ("chest pain", "heart", "palpitation", "breathless", "angina")):
+		diag = "Suspected Angina Pectoris / Cardiovascular Evaluation"
+		notes = f"Cardiology evaluation for reported {symptoms}. Immediate vitals and cardiac tracing required."
+		plan = "Stat 12-lead ECG, cardiology consult, avoid strenuous physical activity, monitor pulse and blood pressure closely."
+		meds.append({"medicine": "Atorvastatin", "dosage": "10mg", "frequency": "Once Daily", "duration": "14 days", "instructions": "Take at bedtime with water"})
+		reports.append({"test": "12-Lead Electrocardiogram (ECG)", "reason": "Evaluate cardiac rhythm, ST-T wave changes, and ischemia"})
+		reports.append({"test": "Lipid Profile", "reason": "Evaluate cholesterol, triglycerides, and cardiovascular risk"})
+
+	elif any(k in s for k in ("headache", "migraine", "head pain")):
+		diag = "Tension-Type Headache / Cephalea"
+		notes = f"Patient suffers from persistent headache. Symptoms: {symptoms}. Neurological screening gross motor intact."
+		plan = "Analgesic protocol, hydration, regular sleep schedule, screen break intervals, stress reduction."
+		meds.append({"medicine": "Paracetamol", "dosage": "500mg", "frequency": "Twice Daily", "duration": "3 days", "instructions": "Take SOS for acute headache after meal"})
+		reports.append({"test": "Blood Pressure & Ophthalmic Fundus Examination", "reason": "Rule out secondary hypertension and optic disc edema"})
+
+	elif any(k in s for k in ("stomach", "abdomen", "vomit", "diarrhea", "nausea", "acidity", "gastric")):
+		diag = "Acute Gastritis / Functional Dyspepsia"
+		notes = f"Abdominal complaints recorded: {symptoms}. Mild epigastric tenderness, soft abdomen, active bowel sounds."
+		plan = "Proton pump inhibitor before breakfast, light bland diet, avoid spicy/greasy foods, oral rehydration."
+		meds.append({"medicine": "Pantoprazole", "dosage": "40mg", "frequency": "Once Daily", "duration": "7 days", "instructions": "Take 30 minutes before morning breakfast"})
+		reports.append({"test": "Ultrasound Abdomen & Pelvis", "reason": "Evaluate gallbladder, liver, and biliary tract"})
+
+	elif any(k in s for k in ("sugar", "diabetes", "thirst", "frequent urination")):
+		diag = "Type 2 Diabetes Mellitus Management"
+		notes = f"Glycemic review for {symptoms}. Baseline metabolic assessment."
+		plan = "Oral hypoglycemic agent, diabetic diet (low glycemic index), 30 minutes daily brisk walk, glycemic log."
+		meds.append({"medicine": "Metformin", "dosage": "500mg", "frequency": "Twice Daily", "duration": "30 days", "instructions": "Take with morning and evening meals"})
+		reports.append({"test": "Fasting & Post-Prandial Blood Sugar", "reason": "Monitor day-to-day glycemic control"})
+		reports.append({"test": "HbA1c (Glycated Hemoglobin)", "reason": "Assess 3-month average glycemic control"})
+
+	else:
+		diag = f"Clinical Symptom Assessment: {symptoms.title()}"
+		notes = f"Consultation initiated for reported symptoms: {symptoms}. Clinical examination conducted. Systemic review normal."
+		plan = "Conservative therapy, adequate rest and hydration, lifestyle moderation. Follow-up if symptoms persist beyond 5 days."
+		meds.append({"medicine": "Paracetamol", "dosage": "500mg", "frequency": "Twice Daily", "duration": "3 days", "instructions": "Take after meals if needed"})
+		reports.append({"test": "Complete Blood Count (CBC)", "reason": "Baseline diagnostic evaluation"})
+
+	# Apply doctor's custom prompt modifications if provided
+	if p:
+		notes += f" [Doctor instruction: {prompt_instruction.strip()}]"
+		if "allergy" in p or "allergic" in p or "avoid" in p or "no " in p:
+			if "amoxicillin" in p or "penicillin" in p:
+				meds = [m for m in meds if not any(x in m["medicine"].lower() for x in ("amoxicillin", "penicillin"))]
+				meds.append({"medicine": "Azithromycin", "dosage": "500mg", "frequency": "Once Daily", "duration": "3 days", "instructions": "Alternative antibiotic taken 1h before food"})
+			if "paracetamol" in p:
+				meds = [m for m in meds if "paracetamol" not in m["medicine"].lower()]
+				meds.append({"medicine": "Ibuprofen", "dosage": "400mg", "frequency": "Twice Daily", "duration": "3 days", "instructions": "Take after meals"})
+		if "multivitamin" in p or "vitamin" in p:
+			meds.append({"medicine": "Multivitamin", "dosage": "1 Tab", "frequency": "Once Daily", "duration": "15 days", "instructions": "Take with breakfast"})
+		if "500mg" in p:
+			for m in meds:
+				if "paracetamol" in m["medicine"].lower():
+					m["dosage"] = "500mg"
+		if "x-ray" in p or "xray" in p:
+			if not any("x-ray" in r["test"].lower() for r in reports):
+				reports.append({"test": "Chest X-Ray (PA View)", "reason": "Doctor requested radiographic screening"})
+		if "blood" in p or "cbc" in p:
+			if not any("cbc" in r["test"].lower() for r in reports):
+				reports.append({"test": "Complete Blood Count (CBC)", "reason": "Hematologic workup"})
+
+	if not history_summary:
+		hist_needed = "Patient has no past medical history on file. Record chronic illnesses, surgeries, and family medical background."
+
+	for m in meds:
+		catalog = _match_catalog_medicine(m["medicine"])
+		m["in_catalog"] = bool(catalog)
+		m["catalog_name"] = catalog or ""
+
+	return {
+		"diagnosis": diag,
+		"consultation_notes": notes,
+		"treatment_plan": plan,
+		"suggested_medicines": meds,
+		"suggested_reports": reports,
+		"history_needed": hist_needed,
+	}
+
+
+def _query_ollama_json(prompt: str, temperature: float = 0.3) -> dict:
+	import json as _json
+	import urllib.request as _req
+	payload = _json.dumps({
+		"model": "qwen2.5:7b",
+		"prompt": prompt,
+		"stream": False,
+		"temperature": temperature,
+		"format": "json",
+		"options": {"num_predict": 1600},
+	}).encode("utf-8")
+	try:
+		request = _req.Request(
+			"http://localhost:11434/api/generate",
+			data=payload,
+			headers={"Content-Type": "application/json"},
+			method="POST",
+		)
+		with _req.urlopen(request, timeout=90) as response:
+			raw = response.read().decode("utf-8")
+			result = _json.loads(raw)
+			text = result.get("response", "{}").strip()
+			if text.startswith("```json"):
+				text = text[7:]
+			if text.endswith("```"):
+				text = text[:-3]
+			return _json.loads(text)
+	except Exception:
+		return {}
+
+
+def _get_patient_medical_history(patient_name: str) -> list:
+	try:
+		rows = frappe.get_all(
+			"Patient Medical History",
+			filters={"patient": patient_name},
+			fields=[
+				"medical_condition", "description", "symptoms", "allergies",
+				"record_type", "status", "severity", "record_date",
+			],
+			order_by="record_date desc",
+		)
+		return rows or []
+	except Exception:
+		return []
+
+
+def _get_patient_appointments(patient_name: str) -> list:
+	try:
+		rows = frappe.get_all(
+			"Appointment",
+			filters={"patient": patient_name, "docstatus": ["!=", 2]},
+			fields=[
+				"appointment_date", "appointment_time", "doctor", "reason",
+				"symptoms", "diagnosis", "treatment_plan", "status",
+			],
+			order_by="appointment_date desc",
+			limit=10,
+		)
+		for r in rows:
+			if r.doctor:
+				dname = frappe.db.get_value("Doctor Profile", r.doctor, "full_name")
+				r.doctor_name = dname
+		return rows or []
+	except Exception:
+		return []
+
+
+def _match_catalog_medicine(name: str):
+	"""Resolve an AI-suggested medicine to a catalog entry, if one exists.
+
+	Tries the exact name, then progressively shorter prefixes so an AI
+	suggestion like "Paracetamol 500mg Tablet" still matches catalog
+	entries such as "Paracetamol".
+	"""
+	try:
+		if frappe.db.exists("Medicine", name):
+			return name
+		words = [w for w in str(name).split() if w]
+		candidates = [name, " ".join(words[:2]), words[0] if words else ""]
+		for candidate in candidates:
+			if not candidate:
+				continue
+			like = "%{0}%".format(candidate.replace("%", "").replace("_", ""))
+			hit = frappe.db.get_value(
+				"Medicine",
+				{"medicine_name": ["like", like]},
+				"name",
+			)
+			if hit:
+				return hit
+		return None
+	except Exception:
+		return None

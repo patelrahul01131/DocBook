@@ -7,6 +7,8 @@ from datetime import datetime, date, time, timedelta
 import frappe
 from frappe import _
 
+from docbook.api.access import require_login, current_patient
+
 
 # ---------------------------------------------------------------------------
 # Helpers & Resolvers
@@ -405,6 +407,11 @@ def list_appointment(patient=None):
             a.consultation_notes,
             a.treatment_plan,
             a.follow_up_date,
+            a.follow_up_instructions,
+            a.qr_code,
+            a.checked_in,
+            a.queue_token,
+            a.visit_stage,
             d.full_name       AS doctor_name,
             d.specialty       AS doctor_specialty,
             d.profile_image   AS doctor_image,
@@ -460,7 +467,10 @@ def show_appointment(appointment_id):
             a.priority,
             a.checked_in,
             a.checked_in_at,
-            a.called_at
+            a.called_at,
+            a.qr_code,
+            a.fast_track,
+            a.ai_priority
         FROM `tabAppointment` a
         WHERE a.name = %(id)s OR a.slot = %(id)s
         LIMIT 1
@@ -579,8 +589,40 @@ def show_appointment(appointment_id):
         )
         referral_data = referral_data[0] if referral_data else None
 
+    # Pre-generate or load base64 QR data URL for upcoming/active appointments
+    qr_data_url = None
+    if appt_data.status not in ("Completed", "Cancelled"):
+        try:
+            import qrcode, base64
+            from io import BytesIO
+            qr_data = f"DOCBOOK|APT|{appt_data['name']}|{appt_data['patient']}|{appt_data['doctor']}|{appt_data['appointment_date']}|{appt_data['appointment_time']}"
+            qr = qrcode.QRCode(version=1, box_size=10, border=4)
+            qr.add_data(qr_data)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = BytesIO()
+            img.save(buf)
+            raw_bytes = buf.getvalue()
+            qr_data_url = f"data:image/png;base64,{base64.b64encode(raw_bytes).decode('ascii')}"
+
+            # If qr_code file URL missing, also create File record
+            if not appt_data.get("qr_code"):
+                file_doc = frappe.get_doc({
+                    "doctype": "File",
+                    "file_name": f"QR-{appt_data['name']}.png",
+                    "content": raw_bytes,
+                    "is_private": 0,
+                })
+                file_doc.save(ignore_permissions=True)
+                frappe.db.set_value("Appointment", appt_data["name"], "qr_code", file_doc.file_url)
+                frappe.db.commit()
+                appt_data["qr_code"] = file_doc.file_url
+        except Exception:
+            pass
+
     return {
         **appt_data,
+        "qr_data_url": qr_data_url,
         "doctor_info": doctor_data,
         "patient_info": patient_data,
         "prescriptions": prescriptions,
@@ -1025,4 +1067,739 @@ def cleanup_old_records():
         "slots_fixed": cleaned_slots,
         "broken_appointments_removed": cleaned_appts,
         "hospital_hours": "09:00:00 - 18:00:00",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Referral-Aware Appointment Booking
+# ---------------------------------------------------------------------------
+
+def _resolve_patient(patient):
+    if not patient:
+        frappe.throw(_("Patient is required"))
+    key = str(patient).strip()
+    if frappe.db.exists("Patient Profile", key):
+        return key
+    patient_name = frappe.db.get_value("Patient Profile", {"user": key}, "name")
+    if patient_name:
+        return patient_name
+    frappe.throw(_("Patient '{0}' not found").format(patient))
+
+
+def _is_slot_blocked_for_referral(doctor_name, date_val, time_val, exclude_appointment=None):
+    filters = {
+        "doctor": doctor_name,
+        "appointment_date": date_val,
+        "appointment_time": time_val,
+        "status": ["in", ["Pending", "Confirmed"]],
+        "docstatus": ["!=", 2],
+    }
+    if exclude_appointment:
+        filters["name"] = ["!=", exclude_appointment]
+    rows = frappe.get_all("Appointment", filters=filters, fields=["name", "referral_type", "fast_track"])
+    for r in rows:
+        if r.referral_type in ("Referral", "Fast Track Referral") or r.fast_track:
+            return True, r.name
+    return False, None
+
+
+@frappe.whitelist()
+def create_referral_appointment(
+    patient,
+    referring_doctor,
+    referred_to_doctor,
+    referral_type="Referral",
+    appointment_date=None,
+    appointment_time=None,
+    reason=None,
+    symptoms=None,
+    clinical_notes=None,
+):
+    require_login()
+
+    patient_name = _resolve_patient(patient)
+
+    referred_name = frappe.db.get_value(
+        "Doctor Profile", {"user": referred_to_doctor}, "name"
+    ) or (referred_to_doctor if frappe.db.exists("Doctor Profile", referred_to_doctor) else None)
+    if not referred_name:
+        frappe.throw(_("Referred doctor '{0}' not found").format(referred_to_doctor))
+
+    referring_name = frappe.db.get_value(
+        "Doctor Profile", {"user": referring_doctor}, "name"
+    ) or (referring_doctor if frappe.db.exists("Doctor Profile", referring_doctor) else None)
+    if not referring_name:
+        frappe.throw(_("Referring doctor '{0}' not found").format(referring_doctor))
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_admin = "System Manager" in user_roles
+    is_receptionist = "Receptionist" in user_roles
+    if not is_admin and not is_receptionist and referring_name != _current_doctor_profile():
+        frappe.throw(_("Only the referring doctor can create this referral appointment"))
+
+    if referral_type not in ("Regular Checkup", "Referral", "Fast Track Referral"):
+        frappe.throw(_("Invalid referral type"))
+
+    if appointment_date and appointment_time:
+        from docbook.api.appointment import validate_appointment_booking
+
+        val = validate_appointment_booking(
+            doctor=referred_name,
+            patient=patient_name,
+            appointment_date=frappe.utils.getdate(appointment_date),
+            appointment_time=frappe.utils.get_time(appointment_time),
+        )
+
+        if referral_type in ("Referral", "Fast Track Referral"):
+            blocked, blocker = _is_slot_blocked_for_referral(
+                referred_name, val["appointment_date"], val["appointment_time"]
+            )
+            if blocked:
+                frappe.throw(
+                    _("Slot {0} is already reserved for another referral appointment ({1})").format(
+                        val["appointment_time"], blocker
+                    )
+                )
+
+        appt = frappe.get_doc({
+            "doctype": "Appointment",
+            "patient": patient_name,
+            "doctor": referred_name,
+            "appointment_date": val["appointment_date"],
+            "appointment_time": val["appointment_time"],
+            "status": "Confirmed",
+            "reason": reason or "Referred appointment",
+            "symptoms": symptoms or "",
+            "referral_type": referral_type,
+            "fast_track": 1 if referral_type == "Fast Track Referral" else 0,
+            "ai_priority": "High" if referral_type == "Fast Track Referral" else "Medium",
+            "created_at": frappe.utils.now_datetime(),
+        })
+        appt.insert(ignore_permissions=True)
+        frappe.db.commit()
+
+        ref_name = None
+        if clinical_notes or reason:
+            try:
+                ref = frappe.get_doc({
+                    "doctype": "Referral",
+                    "patient": patient_name,
+                    "referring_doctor": referring_name,
+                    "referred_to_doctor": referred_name,
+                    "referral_type": referral_type,
+                    "source_appointment": None,
+                    "target_appointment": appt.name,
+                    "status": "Pending",
+                    "reason": reason or "Referred appointment",
+                    "clinical_notes": clinical_notes or "",
+                    "referral_date": frappe.utils.now_datetime(),
+                })
+                ref.insert(ignore_permissions=True)
+                frappe.db.commit()
+                ref_name = ref.name
+            except Exception:
+                ref_name = None
+
+        return {
+            "success": True,
+            "appointment": appt.name,
+            "patient": patient_name,
+            "doctor": referred_name,
+            "referral": ref_name,
+            "referral_type": referral_type,
+            "fast_track": appt.fast_track,
+            "ai_priority": appt.ai_priority,
+            "appointment_date": str(appt.appointment_date),
+            "appointment_time": str(appt.appointment_time)[:5],
+            "message": _("Referral appointment booked and slot reserved"),
+        }
+
+    frappe.throw(_("Appointment date and time are required"))
+
+
+def _current_doctor_profile():
+    return frappe.db.get_value("Doctor Profile", {"user": frappe.session.user}, "name")
+
+
+@frappe.whitelist()
+def generate_qr_code(appointment_id):
+    require_login()
+
+    appt = frappe.db.get_value(
+        "Appointment", appointment_id,
+        ["name", "patient", "doctor", "appointment_date", "appointment_time", "qr_code"],
+        as_dict=True,
+    )
+    if not appt:
+        frappe.throw(_("Appointment not found"), frappe.DoesNotExistError)
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_admin = "System Manager" in user_roles
+    is_receptionist = "Receptionist" in user_roles
+    patient_name = current_patient()
+    if not is_admin and not is_receptionist:
+        if patient_name != appt.patient:
+            doctor_profile = _current_doctor_profile()
+            if doctor_profile != appt.doctor:
+                frappe.throw(_("Not authorized to access this appointment"), frappe.PermissionError)
+
+    import qrcode
+    from io import BytesIO
+
+    qr_data = f"DOCBOOK|APT|{appt['name']}|{appt['patient']}|{appt['doctor']}|{appt['appointment_date']}|{appt['appointment_time']}"
+
+    qr = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr.add_data(qr_data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    import base64
+    buf = BytesIO()
+    img.save(buf)
+    raw_bytes = buf.getvalue()
+    b64_str = base64.b64encode(raw_bytes).decode("ascii")
+    data_url = f"data:image/png;base64,{b64_str}"
+
+    file_doc = frappe.get_doc({
+        "doctype": "File",
+        "file_name": f"QR-{appt['name']}.png",
+        "content": raw_bytes,
+        "is_private": 0,
+    })
+    file_doc.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    frappe.db.set_value("Appointment", appointment_id, "qr_code", file_doc.file_url)
+    frappe.db.commit()
+
+    return {
+        "success": True,
+        "appointment": appointment_id,
+        "qr_code": file_doc.file_url,
+        "qr_data_url": data_url,
+        "qr_data": qr_data,
+        "message": _("QR code generated successfully"),
+    }
+
+
+# Canonical specialty synonyms — AI must pick ONLY from these options.
+# Keys are user-facing terms/symptoms/synonyms; values are canonical specialty names.
+# Order matters: more specific/specialty terms should come before general ones.
+_SPECIALTY_SYNONYMS = {
+    # --- Cardiology ---
+    "cardiologist": "cardiology",
+    "heart": "cardiology",
+    "cardiac": "cardiology",
+    "chest pain": "cardiology",
+    "heart attack": "cardiology",
+    "palpitations": "cardiology",
+    "irregular heartbeat": "cardiology",
+    "hypertension": "cardiology",
+    "high blood pressure": "cardiology",
+    "angina": "cardiology",
+    "shortness of breath": "cardiology",
+    "leg swelling": "cardiology",
+    "edema": "cardiology",
+    # --- Dermatology ---
+    "dermatologist": "dermatology",
+    "skin": "dermatology",
+    "rash": "dermatology",
+    "acne": "dermatology",
+    "eczema": "dermatology",
+    "psoriasis": "dermatology",
+    "mole": "dermatology",
+    "skin cancer": "dermatology",
+    "itching": "dermatology",
+    "hives": "dermatology",
+    "dermatitis": "dermatology",
+    "wart": "dermatology",
+    "hair loss": "dermatology",
+    "sunburn": "dermatology",
+    "blister": "dermatology",
+    # --- Orthopedics ---
+    "orthopedic": "orthopedics",
+    "ortho": "orthopedics",
+    "bone": "orthopedics",
+    "fracture": "orthopedics",
+    "broken bone": "orthopedics",
+    "sprain": "orthopedics",
+    "strain": "orthopedics",
+    "arthritis": "orthopedics",
+    "back pain": "orthopedics",
+    "joint pain": "orthopedics",
+    "knee pain": "orthopedics",
+    "shoulder pain": "orthopedics",
+    "neck pain": "orthopedics",
+    "muscle pain": "orthopedics",
+    "sports injury": "orthopedics",
+    "torn ligament": "orthopedics",
+    "tendonitis": "orthopedics",
+    # --- Pediatrics ---
+    "pediatrician": "pediatrics",
+    "pediatrics": "pediatrics",
+    "child": "pediatrics",
+    "baby": "pediatrics",
+    "infant": "pediatrics",
+    "toddler": "pediatrics",
+    "newborn": "pediatrics",
+    "child fever": "pediatrics",
+    "childhood illness": "pediatrics",
+    "vaccination": "pediatrics",
+    # --- Dentist ---
+    "dentist": "dentist",
+    "dental": "dentist",
+    "teeth": "dentist",
+    "tooth": "dentist",
+    "orthodontist": "dentist",
+    "toothache": "dentist",
+    "dental pain": "dentist",
+    "gum bleeding": "dentist",
+    "wisdom tooth": "dentist",
+    "cavity": "dentist",
+    "root canal": "dentist",
+    "mouth ulcer": "dentist",
+    "jaw pain": "dentist",
+    "tooth decay": "dentist",
+    "gum disease": "dentist",
+    # --- General Physician (fallback for truly general symptoms) ---
+    "general": "general physician",
+    "physician": "general physician",
+    "gp": "general physician",
+    "fever": "general physician",
+    "cold": "general physician",
+    "flu": "general physician",
+    "headache": "general physician",
+    "cough": "general physician",
+    "sore throat": "general physician",
+    "stomach pain": "general physician",
+    "fatigue": "general physician",
+    "nausea": "general physician",
+    "vomiting": "general physician",
+    "diarrhea": "general physician",
+    "constipation": "general physician",
+    "allergy": "general physician",
+    "infection": "general physician",
+    "migraine": "general physician",
+    "dizziness": "general physician",
+    "checkup": "general physician",
+}
+
+# Deduplicated canonical specialty values the AI is allowed to return.
+_VALID_SPECIALTIES = sorted(set(_SPECIALTY_SYNONYMS.values()))
+
+_SYNONYM_KEYS_LOWER = {k.lower(): v for k, v in _SPECIALTY_SYNONYMS.items()}
+
+
+def _normalize_specialty(raw: str) -> str | None:
+    """Map a raw specialty string to a canonical value via synonyms, or None."""
+    key = raw.strip().lower()
+    return _SYNONYM_KEYS_LOWER.get(key)
+
+
+@frappe.whitelist()
+def _query_ollama(symptoms: str) -> dict:
+    """
+    Query local Ollama (qwen2.5:7b) to analyse symptoms and suggest
+    relevant medical specialties. The AI is constrained to pick ONLY from
+    the predefined _SPECIALTY_SYNONYMS options — it cannot invent specialties.
+    Falls back to keyword matching if Ollama is unavailable or returns an error.
+    """
+    import json as _json
+    import urllib.request as _req
+    import urllib.error as _err
+
+    valid_list = ", ".join(_VALID_SPECIALTIES)
+
+    prompt = (
+        "You are a medical triage assistant. Given the patient symptoms below, "
+        "select the MOST relevant medical specialty (one or more) STRICTLY from this "
+        f"allowed list: {valid_list}. Do NOT invent any specialty outside this list.\n"
+        "Mapping guidance: chest pain/heart palpitations/high blood pressure -> cardiology; "
+        "rash/acne/eczema/itching/skin lesions -> dermatology; "
+        "fracture/back pain/joint pain/knee pain/arthritis/sports injury -> orthopedics; "
+        "child/baby/infant/toddler/pediatric/vaccination -> pediatrics; "
+        "toothache/gum bleeding/cavity/wisdom tooth/jaw pain -> dentist; "
+        "fever/cold/flu/headache/cough/sore throat/stomach pain/general checkup -> general physician. "
+        "If symptoms clearly point to a specific specialty, prefer that over general physician. "
+        "Also estimate urgency (low/medium/high/critical). "
+        "Reply ONLY in JSON format with keys: specialties (array of strings from the "
+        "allowed list only), urgency (string), reasoning (short string).\n\n"
+        f"Symptoms: {symptoms}"
+    )
+
+    payload = _json.dumps(
+        {
+            "model": "qwen2.5:7b",
+            "prompt": prompt,
+            "stream": False,
+            "temperature": 0.3,
+        }
+    ).encode("utf-8")
+
+    try:
+        request = _req.Request(
+            "http://localhost:11434/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _req.urlopen(request, timeout=15) as response:
+            raw = response.read().decode("utf-8")
+            result = _json.loads(raw)
+            text = result.get("response", "{}")
+            # Ollama may wrap JSON in code fences; strip them
+            text = text.strip()
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.endswith("```"):
+                text = text[:-3]
+            parsed = _json.loads(text)
+            raw_specialties = parsed.get("specialties", [])
+
+            # Normalize each returned specialty through the synonyms map.
+            # Drop anything that doesn't map to a known canonical value.
+            normalized = []
+            for s in raw_specialties:
+                canon = _normalize_specialty(s)
+                if canon and canon not in normalized:
+                    normalized.append(canon)
+
+            if not normalized:
+                # AI returned nothing usable — fall through to keyword matching.
+                raise ValueError("No valid specialties returned by Ollama")
+
+            return {
+                "specialties": normalized,
+                "urgency": parsed.get("urgency", "medium"),
+                "reasoning": parsed.get("reasoning", ""),
+            }
+    except Exception:
+        pass
+
+    # Fallback: keyword-based matching using the synonyms map.
+    symptoms_lower = symptoms.lower()
+    matched_specialties = []
+    for synonym_key, canonical in _SPECIALTY_SYNONYMS.items():
+        if synonym_key in symptoms_lower and canonical not in matched_specialties:
+            matched_specialties.append(canonical)
+
+    if not matched_specialties:
+        matched_specialties = ["general physician"]
+
+    urgency = "medium"
+    critical_keywords = ["chest pain", "stroke", "seizure", "difficulty breathing", "severe"]
+    if any(kw in symptoms_lower for kw in critical_keywords):
+        urgency = "critical"
+
+    return {
+        "specialties": matched_specialties,
+        "urgency": urgency,
+        "reasoning": "AI matched your symptoms to the most relevant specialist.",
+    }
+
+
+@frappe.whitelist()
+def ai_assign_doctor(symptoms, preferred_date=None, preferred_time=None):
+    require_login()
+
+    if not symptoms or not str(symptoms).strip():
+        frappe.throw(_("Symptoms are required"))
+
+    # Query Ollama for specialty + urgency analysis
+    ai_result = _query_ollama(symptoms)
+    matched_specialties = ai_result.get("specialties", ["general physician"])
+    ai_urgency = ai_result.get("urgency", "medium")
+    ai_reasoning = ai_result.get("reasoning", "")
+
+    doctors = frappe.get_all(
+        "Doctor Profile",
+        filters={
+            "specialty": ["in", matched_specialties],
+            "is_approved": 1,
+        },
+        fields=["name", "user", "full_name", "specialty", "rating", "consultation_fee"],
+        order_by="rating desc",
+    )
+
+    # Map urgency to ai_priority
+    priority_map = {"low": "Low", "medium": "Medium", "high": "High", "critical": "Critical"}
+    ai_priority = priority_map.get(ai_urgency, "Medium")
+
+    if not doctors:
+        return {
+            "success": True,
+            "symptoms": symptoms,
+            "ai_reasoning": ai_reasoning,
+            "ai_urgency": ai_urgency,
+            "ai_priority": ai_priority,
+            "assigned_doctor": None,
+            "recommended_slot": None,
+            "matched_specialties": matched_specialties,
+            "doctors_available": False,
+            "message": _("No doctors available for your symptoms"),
+        }
+
+    from docbook.api.appointment import get_available_slots
+
+    target_date = preferred_date or frappe.utils.getdate()
+
+    # Sort doctors: critical urgency gets first available slot across all matched doctors
+    best_doctor = None
+    best_slot = None
+
+    for d in doctors:
+        slots = get_available_slots(doctor=d["user"], date=str(target_date))
+        if slots:
+            best_doctor = d
+            best_slot = slots[0]
+            break
+
+    if not best_doctor:
+        frappe.throw(_("No available slots for matched doctors on the selected date"))
+
+    return {
+        "success": True,
+        "symptoms": symptoms,
+        "ai_reasoning": ai_reasoning,
+        "ai_urgency": ai_urgency,
+        "ai_priority": ai_priority,
+        "assigned_doctor": {
+            "name": best_doctor["name"],
+            "full_name": best_doctor["full_name"],
+            "specialty": best_doctor["specialty"],
+            "rating": best_doctor.get("rating"),
+            "consultation_fee": best_doctor.get("consultation_fee"),
+        },
+        "recommended_slot": best_slot,
+        "matched_specialties": matched_specialties,
+        "message": _("Doctor assigned based on your symptoms"),
+    }
+
+
+@frappe.whitelist()
+def get_patient_appointment_history(patient=None):
+    require_login()
+
+    user_roles = frappe.get_roles(frappe.session.user)
+    is_admin = "System Manager" in user_roles
+    is_receptionist = "Receptionist" in user_roles
+    is_doctor = bool(_current_doctor_profile())
+
+    if not is_admin and not is_receptionist and not is_doctor:
+        frappe.throw(_("Not authorized"), frappe.PermissionError)
+
+    if patient:
+        patient_name = _resolve_patient(patient)
+    else:
+        patient_name = current_patient()
+        if not patient_name:
+            frappe.throw(_("Patient not found"))
+
+    appointments = frappe.get_all(
+        "Appointment",
+        filters={"patient": patient_name, "docstatus": ["!=", 2]},
+        fields=[
+            "name", "doctor", "appointment_date", "appointment_time",
+            "status", "reason", "symptoms", "referral_type", "fast_track",
+            "ai_priority", "queue_token", "visit_stage", "checked_in",
+            "created_at",
+        ],
+        order_by="appointment_date desc, appointment_time desc",
+    )
+
+    for a in appointments:
+        if a.doctor:
+            dname = frappe.db.get_value("Doctor Profile", a.doctor, "full_name")
+            a.doctor_name = dname
+
+    patient_doc = frappe.db.get_value(
+        "Patient Profile", patient_name,
+        ["full_name", "phone", "age", "gender"], as_dict=True
+    )
+
+    return {
+        "success": True,
+        "patient": patient_name,
+        "patient_details": patient_doc or {},
+        "appointments": appointments,
+        "message": _("Patient history loaded"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Report Upload with Production-Grade Validations
+# ---------------------------------------------------------------------------
+
+ALLOWED_REPORT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
+MAX_REPORT_SIZE_MB = 10
+MAX_REPORT_SIZE_BYTES = MAX_REPORT_SIZE_MB * 1024 * 1024
+
+
+def _validate_report_file(file_data: bytes, file_name: str) -> str:
+    """Validate uploaded report file. Returns the detected extension (lowercased)."""
+    import os as _os
+
+    if not file_data:
+        frappe.throw(_("No file data provided"))
+    if not file_name:
+        frappe.throw(_("File name is required"))
+
+    ext = _os.path.splitext(file_name)[1].lower()
+    if ext not in ALLOWED_REPORT_EXTENSIONS:
+        frappe.throw(
+            _("Unsupported file type '{0}'. Allowed: {1}").format(
+                ext, ", ".join(sorted(ALLOWED_REPORT_EXTENSIONS))
+            )
+        )
+
+    if len(file_data) > MAX_REPORT_SIZE_BYTES:
+        frappe.throw(
+            _("File too large ({0:.1f} MB). Maximum allowed: {1} MB").format(
+                len(file_data) / (1024 * 1024), MAX_REPORT_SIZE_MB
+            )
+        )
+
+    return ext
+
+
+@frappe.whitelist()
+def upload_report(
+    file_data=None,
+    file_name=None,
+    patient=None,
+    appointment=None,
+    title=None,
+    report_type="Document",
+    description=None,
+):
+    """
+    Upload a medical report (image or PDF) with production-grade validations.
+
+    Parameters:
+        file_data: base64-encoded file content
+        file_name: original file name
+        patient: Patient Profile name or user email
+        appointment: linked Appointment name (optional)
+        title: report title (required)
+        report_type: Lab | Imaging | Prescription | Document | Other
+        description: optional description/instructions
+    """
+    require_login()
+
+    if not title or not str(title).strip():
+        frappe.throw(_("Report title is required"))
+
+    if report_type not in ("Lab", "Imaging", "Prescription", "Document", "Other"):
+        frappe.throw(_("Invalid report type"))
+
+    # Resolve patient
+    patient_name = _resolve_patient(patient) if patient else current_patient()
+    if not patient_name:
+        frappe.throw(_("Patient not found"))
+
+    # Validate appointment if provided
+    if appointment:
+        appt_exists = frappe.db.exists("Appointment", appointment)
+        if not appt_exists:
+            frappe.throw(_("Appointment '{0}' not found").format(appointment))
+
+    # Decode and validate file
+    import base64 as _b64
+
+    if not file_data:
+        frappe.throw(_("No file uploaded"))
+
+    try:
+        file_bytes = _b64.b64decode(file_data, validate=True)
+    except Exception:
+        frappe.throw(_("Invalid file data (not valid base64)"))
+
+    ext = _validate_report_file(file_bytes, file_name or "report")
+
+    # Save file via Frappe File doctype
+    file_doc = frappe.get_doc(
+        {
+            "doctype": "File",
+            "file_name": (file_name or "report") + ext,
+            "content": file_bytes,
+            "is_private": 0,
+        }
+    )
+    file_doc.save(ignore_permissions=True)
+    frappe.db.commit()
+
+    # Create Patient Report record
+    report_doc = frappe.get_doc(
+        {
+            "doctype": "Patient Report",
+            "patient": patient_name,
+            "appointment": appointment or None,
+            "report_type": report_type,
+            "title": title.strip(),
+            "description": description or "",
+            "report_file": file_doc.file_url,
+            "uploaded_by": frappe.session.user,
+            "uploaded_at": frappe.utils.now_datetime(),
+            "status": "Uploaded",
+        }
+    )
+    report_doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "success": True,
+        "report_name": report_doc.name,
+        "file_url": file_doc.file_url,
+        "file_name": file_doc.file_name,
+        "file_size": len(file_bytes),
+        "extension": ext,
+        "message": _("Report uploaded successfully"),
+    }
+
+
+@frappe.whitelist()
+def preview_report(file_url=None, file_name=None):
+    """
+    Return file info for preview. The actual file is served by Frappe's
+    /files/ URL which handles inline viewing for images and PDFs.
+    """
+    require_login()
+    if not file_url:
+        frappe.throw(_("File URL is required"))
+    return {
+        "file_url": file_url,
+        "file_name": file_name or file_url.split("/")[-1],
+        "can_preview": True,
+    }
+
+
+@frappe.whitelist()
+def list_patient_reports(patient=None):
+    """
+    List medical reports for a patient.
+    """
+    require_login()
+
+    patient_name = _resolve_patient(patient) if patient else current_patient()
+    if not patient_name:
+        frappe.throw(_("Patient not found"))
+
+    reports = frappe.get_all(
+        "Patient Report",
+        filters={"patient": patient_name},
+        fields=[
+            "name", "patient", "appointment", "referral", "ordered_by",
+            "report_type", "title", "laboratory", "external", "status",
+            "sample_collected_at", "description", "findings",
+            "report_file", "uploaded_by", "uploaded_at", "reviewed_by",
+            "reviewed_at", "creation", "modified",
+        ],
+        order_by="creation desc",
+    )
+
+    return {
+        "success": True,
+        "patient": patient_name,
+        "reports": reports,
+        "message": _("Reports loaded"),
     }

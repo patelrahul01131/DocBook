@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { call } from '../../api'
 
@@ -23,6 +23,22 @@ const consultation = reactive({
 const savingConsultation = ref(false)
 const consultationSaved = ref(false)
 const consultationError = ref(null)
+
+// AI assistance
+const aiFilling = ref(false)
+const aiFillError = ref(null)
+const aiFillApplied = ref(false)
+const aiSuggest = ref(null) // medicines / reports / history suggestions from the last AI fill
+const dismissedMedicines = ref([]) // medicines explicitly dismissed with minus
+const dismissedReports = ref([]) // reports explicitly dismissed with minus
+const aiAutoSuggestEnabled = ref(true)
+const doctorAiPrompt = ref('')
+const addingAllSuggestions = ref(false)
+
+// Visit completion
+const completingVisit = ref(false)
+const completeError = ref(null)
+const visitCompleted = ref(false)
 
 // Prescription form
 const prescription = ref(null)
@@ -99,7 +115,9 @@ const deletingMed = ref(false)
 const deleteMedError = ref(null)
 const selectedMedForDelete = ref(null)
 
-// Medical history form
+// Medical history
+const patientHistory = ref([])
+const loadingHistory = ref(false)
 const historyForm = reactive({
   medical_condition: '',
   description: '',
@@ -114,8 +132,44 @@ const historySaved = ref(false)
 const historyError = ref(null)
 const showHistoryForm = ref(false)
 
-async function fetchAppointment() {
-  loading.value = true
+// Edit medical history modal
+const showEditHistoryModal = ref(false)
+const editingHistory = ref(false)
+const editHistoryError = ref(null)
+const editHistoryForm = reactive({
+  name: '',
+  medical_condition: '',
+  record_type: 'Medical Condition',
+  status: 'Active',
+  severity: '',
+  description: '',
+  symptoms: '',
+  allergies: '',
+})
+
+// Delete medical history modal
+const showDeleteHistoryModal = ref(false)
+const deletingHistory = ref(false)
+const deleteHistoryError = ref(null)
+const selectedHistoryForDelete = ref(null)
+
+async function autoSaveConsultationDraft() {
+  if (consultation.symptoms || consultation.diagnosis || consultation.treatment_plan || consultation.consultation_notes) {
+    try {
+      await call('docbook.api.prescription.record_consultation', {
+        appointment: appointmentId,
+        ...consultation,
+      })
+    } catch (e) {
+      console.warn('Auto-save consultation note draft failed', e)
+    }
+  }
+}
+
+async function fetchAppointment(isInitial = false) {
+  if (isInitial) {
+    loading.value = true
+  }
   error.value = null
   try {
     let found = null
@@ -132,17 +186,53 @@ async function fetchAppointment() {
 
     if (!found) throw new Error('Appointment not found or you do not have access.')
     appointment.value = found
-    consultation.symptoms = found.symptoms || ''
-    consultation.diagnosis = found.diagnosis || ''
-    consultation.consultation_notes = found.consultation_notes || ''
-    consultation.treatment_plan = found.treatment_plan || ''
-    consultation.follow_up_date = found.follow_up_date || ''
-    consultation.follow_up_instructions = found.follow_up_instructions || ''
+
+    if (isInitial) {
+      consultation.symptoms = found.symptoms || ''
+      consultation.diagnosis = found.diagnosis || ''
+      consultation.consultation_notes = found.consultation_notes || ''
+      consultation.treatment_plan = found.treatment_plan || ''
+      consultation.follow_up_date = found.follow_up_date || ''
+      consultation.follow_up_instructions = found.follow_up_instructions || ''
+    } else {
+      // Preserve active user / AI entered consultation text; only fill if currently empty
+      if (!consultation.symptoms && found.symptoms) consultation.symptoms = found.symptoms
+      if (!consultation.diagnosis && found.diagnosis) consultation.diagnosis = found.diagnosis
+      if (!consultation.consultation_notes && found.consultation_notes) consultation.consultation_notes = found.consultation_notes
+      if (!consultation.treatment_plan && found.treatment_plan) consultation.treatment_plan = found.treatment_plan
+      if (!consultation.follow_up_date && found.follow_up_date) consultation.follow_up_date = found.follow_up_date
+      if (!consultation.follow_up_instructions && found.follow_up_instructions) consultation.follow_up_instructions = found.follow_up_instructions
+    }
+
     await fetchPrescription()
+    if (found.patient) {
+      await fetchPatientHistory(found.patient)
+    }
   } catch (e) {
-    error.value = e.message || 'Unable to load appointment.'
+    if (isInitial) {
+      error.value = e.message || 'Unable to load appointment.'
+    }
   } finally {
-    loading.value = false
+    if (isInitial) {
+      loading.value = false
+    }
+  }
+}
+
+async function fetchPatientHistory(patientName) {
+  const p = patientName || appointment.value?.patient
+  if (!p) return
+  loadingHistory.value = true
+  try {
+    const list = await call('docbook.api.medical_history.get_patient_medical_history', {
+      patient: p,
+    })
+    patientHistory.value = Array.isArray(list) ? list : []
+  } catch (err) {
+    console.warn('Could not load patient medical history:', err)
+    patientHistory.value = []
+  } finally {
+    loadingHistory.value = false
   }
 }
 
@@ -186,6 +276,314 @@ async function saveConsultation() {
     consultationError.value = e.message || 'Failed to save consultation.'
   } finally {
     savingConsultation.value = false
+  }
+}
+
+async function fillWithAi() {
+  if (aiFilling.value) return
+  aiFillError.value = null
+  aiFillApplied.value = false
+  if (!consultation.symptoms.trim()) {
+    aiFillError.value = 'Record the symptoms first — Fill with AI works from the symptoms you enter.'
+    return
+  }
+  aiFilling.value = true
+  try {
+    const res = await call('docbook.api.prescription.ai_fill_consultation', {
+      appointment: appointmentId,
+      symptoms: consultation.symptoms,
+      reason: appointment.value?.reason,
+    })
+    const s = res?.suggestions || {}
+    if (!s.diagnosis && !s.consultation_notes && !s.treatment_plan) {
+      aiFillError.value = 'AI could not generate suggestions right now. Please fill the form manually.'
+      return
+    }
+    if (s.diagnosis) consultation.diagnosis = s.diagnosis
+    if (s.consultation_notes) consultation.consultation_notes = s.consultation_notes
+    if (s.treatment_plan) consultation.treatment_plan = s.treatment_plan
+    aiSuggest.value = {
+      medicines: Array.isArray(s.suggested_medicines) ? s.suggested_medicines : [],
+      reports: Array.isArray(s.suggested_reports) ? s.suggested_reports : [],
+      history_needed: s.history_needed || '',
+    }
+    dismissedMedicines.value = []
+    dismissedReports.value = []
+    aiFillApplied.value = true
+  } catch (e) {
+    aiFillError.value = e.message || 'AI fill failed. Please try again.'
+  } finally {
+    aiFilling.value = false
+  }
+}
+
+async function refineWithAi() {
+  if (aiFilling.value) return
+  aiFillError.value = null
+  aiFillApplied.value = false
+  if (!doctorAiPrompt.value.trim() && !consultation.symptoms.trim()) {
+    aiFillError.value = 'Please provide an adjustment instruction or symptoms to refine suggestions.'
+    return
+  }
+  aiFilling.value = true
+  try {
+    const res = await call('docbook.api.prescription.ai_fill_consultation', {
+      appointment: appointmentId,
+      symptoms: consultation.symptoms || appointment.value?.symptoms || 'Clinical visit',
+      reason: appointment.value?.reason,
+      prompt_instruction: doctorAiPrompt.value.trim(),
+    })
+    const s = res?.suggestions || {}
+    if (s.diagnosis) consultation.diagnosis = s.diagnosis
+    if (s.consultation_notes) consultation.consultation_notes = s.consultation_notes
+    if (s.treatment_plan) consultation.treatment_plan = s.treatment_plan
+    aiSuggest.value = {
+      medicines: Array.isArray(s.suggested_medicines) ? s.suggested_medicines : [],
+      reports: Array.isArray(s.suggested_reports) ? s.suggested_reports : [],
+      history_needed: s.history_needed || '',
+    }
+    dismissedMedicines.value = []
+    dismissedReports.value = []
+    doctorAiPrompt.value = ''
+    aiFillApplied.value = true
+  } catch (e) {
+    aiFillError.value = e.message || 'AI adjustment failed. Please try again.'
+  } finally {
+    aiFilling.value = false
+  }
+}
+
+function isMedicineAlreadyPrescribed(m) {
+  if (!prescribedMedicines.value || !prescribedMedicines.value.length) return false
+  const mName = (m.medicine || '').trim().toLowerCase()
+  const mCat = (m.catalog_name || '').trim().toLowerCase()
+  return prescribedMedicines.value.some(p => {
+    const pMed = (p.medicine || '').trim().toLowerCase()
+    const pName = (p.medicine_name || '').trim().toLowerCase()
+    const pPrescribed = (p.prescribed_medicine_name || '').trim().toLowerCase()
+    if (mName && (pMed === mName || pName === mName || pPrescribed === mName)) return true
+    if (mCat && (pMed === mCat || pName === mCat || pPrescribed === mCat)) return true
+    if (mName && pName && (mName.includes(pName) || pName.includes(mName))) return true
+    return false
+  })
+}
+
+function isReportAlreadyOrdered(r) {
+  if (!appointment.value?.reports || !appointment.value.reports.length) return false
+  const rTest = (r.test || '').trim().toLowerCase()
+  return appointment.value.reports.some(rp => {
+    const title = (rp.title || '').trim().toLowerCase()
+    if (rTest && (title === rTest || title.includes(rTest) || rTest.includes(title))) return true
+    return false
+  })
+}
+
+const visibleAiMedicines = computed(() => {
+  if (!aiSuggest.value || !Array.isArray(aiSuggest.value.medicines)) return []
+  return aiSuggest.value.medicines.filter(m => {
+    const key = (m.medicine || m.catalog_name || '').trim()
+    if (dismissedMedicines.value.includes(key)) return false
+    if (isMedicineAlreadyPrescribed(m)) return false
+    return true
+  })
+})
+
+const visibleAiReports = computed(() => {
+  if (!aiSuggest.value || !Array.isArray(aiSuggest.value.reports)) return []
+  return aiSuggest.value.reports.filter(r => {
+    const key = (r.test || '').trim()
+    if (dismissedReports.value.includes(key)) return false
+    if (isReportAlreadyOrdered(r)) return false
+    return true
+  })
+})
+
+function dismissMedSuggestion(m) {
+  const key = (m.medicine || m.catalog_name || '').trim()
+  if (key && !dismissedMedicines.value.includes(key)) {
+    dismissedMedicines.value.push(key)
+  }
+}
+
+function dismissReportSuggestion(r) {
+  const key = (r.test || '').trim()
+  if (key && !dismissedReports.value.includes(key)) {
+    dismissedReports.value.push(key)
+  }
+}
+
+function restoreDismissedSuggestions() {
+  dismissedMedicines.value = []
+  dismissedReports.value = []
+}
+
+function clearAiSuggest() {
+  aiSuggest.value = null
+  dismissedMedicines.value = []
+  dismissedReports.value = []
+}
+
+function normalizeAiFrequency(raw) {
+  const s = String(raw || '').toLowerCase()
+  if (s.includes('6 hour') || s.includes('four') || s.includes('4 times')) return 'Four Times Daily'
+  if (s.includes('8 hour') || s.includes('three') || s.includes('3 times')) return 'Three Times Daily'
+  if (s.includes('12 hour') || s.includes('twice') || s.includes('two') || s.includes('2 times')) return 'Twice Daily'
+  if (s.includes('4 times')) return 'Four Times Daily'
+  if (s.includes('3 times')) return 'Three Times Daily'
+  if (s.includes('2 times')) return 'Twice Daily'
+  return 'Once Daily'
+}
+
+function aiDurationDays(raw) {
+  const m = String(raw || '').match(/\d+/)
+  return m ? parseInt(m[0], 10) : 0
+}
+
+async function useMedSuggestion(m) {
+  try {
+    await autoSaveConsultationDraft()
+    if (!prescription.value) {
+      await createPrescription()
+    }
+    if (!prescription.value) {
+      throw new Error('Prescription could not be created.')
+    }
+    const today = new Date().toISOString().slice(0, 10)
+    let endDate = ''
+    const days = aiDurationDays(m.duration)
+    if (days) {
+      const end = new Date()
+      end.setDate(end.getDate() + days)
+      endDate = end.toISOString().slice(0, 10)
+    } else {
+      const end = new Date()
+      end.setDate(end.getDate() + 5)
+      endDate = end.toISOString().slice(0, 10)
+    }
+
+    const medNameOrId = (m.in_catalog && m.catalog_name) ? m.catalog_name : m.medicine
+
+    await call('docbook.api.prescription.add_prescription_medicine', {
+      prescription: prescription.value.name,
+      medicine: medNameOrId,
+      dosage: m.dosage || '1 Tablet',
+      route: 'Oral',
+      frequency: normalizeAiFrequency(m.frequency),
+      start_date: today,
+      end_date: endDate,
+      instructions: m.instructions || '',
+    })
+
+    await fetchPrescribedMedicines(prescription.value.name)
+  } catch (err) {
+    console.error('Failed to use medicine suggestion:', err)
+    aiFillError.value = err.message || 'Failed to prescribe medicine.'
+  }
+}
+
+async function useReportSuggestion(r) {
+  try {
+    await autoSaveConsultationDraft()
+    await call('docbook.api.report.order_report', {
+      appointment: appointment.value.name,
+      report_type: 'Lab',
+      title: r.test || 'Lab Investigation',
+      description: r.reason ? `AI suggested: ${r.reason}` : '',
+      laboratory: '',
+    })
+    await fetchAppointment(false)
+  } catch (err) {
+    console.error('Failed to order report:', err)
+    aiFillError.value = err.message || 'Failed to order report.'
+  }
+}
+
+async function addAllAiSuggestions() {
+  if (!aiSuggest.value || addingAllSuggestions.value) return
+  addingAllSuggestions.value = true
+  aiFillError.value = null
+  try {
+    await autoSaveConsultationDraft()
+    const medsToAdd = [...visibleAiMedicines.value]
+    const reportsToAdd = [...visibleAiReports.value]
+
+    if (medsToAdd.length && !prescription.value) {
+      await createPrescription()
+    }
+
+    if (medsToAdd.length && prescription.value) {
+      const today = new Date().toISOString().slice(0, 10)
+      for (const m of medsToAdd) {
+        try {
+          let endDate = ''
+          const days = aiDurationDays(m.duration)
+          if (days) {
+            const end = new Date()
+            end.setDate(end.getDate() + days)
+            endDate = end.toISOString().slice(0, 10)
+          } else {
+            const end = new Date()
+            end.setDate(end.getDate() + 5)
+            endDate = end.toISOString().slice(0, 10)
+          }
+          const medId = (m.in_catalog && m.catalog_name) ? m.catalog_name : m.medicine
+          await call('docbook.api.prescription.add_prescription_medicine', {
+            prescription: prescription.value.name,
+            medicine: medId,
+            dosage: m.dosage || '1 Tablet',
+            route: 'Oral',
+            frequency: normalizeAiFrequency(m.frequency),
+            start_date: today,
+            end_date: endDate,
+            instructions: m.instructions || '',
+          })
+        } catch (e) {
+          console.warn('Could not add medicine:', m.medicine, e)
+        }
+      }
+      await fetchPrescribedMedicines(prescription.value.name)
+    }
+
+    if (reportsToAdd.length) {
+      for (const r of reportsToAdd) {
+        try {
+          await call('docbook.api.report.order_report', {
+            appointment: appointment.value.name,
+            report_type: 'Lab',
+            title: r.test || 'Lab Investigation',
+            description: r.reason ? `AI suggested: ${r.reason}` : '',
+            laboratory: '',
+          })
+        } catch (e) {
+          console.warn('Could not order report:', r.test, e)
+        }
+      }
+      await fetchAppointment(false)
+    }
+  } catch (err) {
+    aiFillError.value = err.message || 'Could not complete adding all suggestions.'
+  } finally {
+    addingAllSuggestions.value = false
+  }
+}
+
+
+async function completeVisit() {
+  if (completingVisit.value) return
+  completeError.value = null
+  completingVisit.value = true
+  try {
+    await call('docbook.api.queue.mark_visit_completed', {
+      appointment: appointmentId,
+    })
+    visitCompleted.value = true
+    if (appointment.value) {
+      appointment.value = { ...appointment.value, status: 'Completed', visit_stage: 'Completed' }
+    }
+  } catch (e) {
+    completeError.value = e.message || 'Failed to complete the visit.'
+  } finally {
+    completingVisit.value = false
   }
 }
 
@@ -394,6 +792,7 @@ async function addMedicine() {
   addingMedicine.value = true
   addMedError.value = null
   try {
+    await autoSaveConsultationDraft()
     await call('docbook.api.prescription.add_prescription_medicine', {
       prescription: prescription.value.name,
       medicine: medForm.medicine,
@@ -446,6 +845,9 @@ async function saveHistory() {
       medical_condition: '', description: '', symptoms: '', allergies: '',
       record_type: 'Medical Condition', status: 'Active', severity: '',
     })
+    if (appointment.value?.patient) {
+      await fetchPatientHistory(appointment.value.patient)
+    }
     setTimeout(() => { historySaved.value = false }, 3000)
   } catch (e) {
     historyError.value = e.message || 'Failed to save history record.'
@@ -470,6 +872,24 @@ const orderingReport = ref(false)
 const orderReportError = ref(null)
 const reportForm = ref({ report_type: 'Lab', title: '', description: '', laboratory: '' })
 
+// Edit report modal
+const showEditReportModal = ref(false)
+const editingReport = ref(false)
+const editReportError = ref(null)
+const editReportForm = reactive({
+  name: '',
+  title: '',
+  report_type: 'Lab',
+  description: '',
+  laboratory: '',
+})
+
+// Delete report modal
+const showDeleteReportModal = ref(false)
+const deletingReport = ref(false)
+const deleteReportError = ref(null)
+const selectedReportForDelete = ref(null)
+
 const showRefer = ref(false)
 const creatingReferral = ref(false)
 const referError = ref(null)
@@ -477,6 +897,17 @@ const specialistDoctors = ref([])
 const availableSlots = ref([])
 const slotsLoading = ref(false)
 const referForm = ref({ referred_to_doctor: '', appointment_date: '', appointment_time: '', reason: '', clinical_notes: '' })
+
+// Edit referral modal
+const showEditReferralModal = ref(false)
+const editingReferral = ref(false)
+const editReferralError = ref(null)
+const editReferralForm = reactive({
+  name: '',
+  reason: '',
+  clinical_notes: '',
+})
+const cancellingReferral = ref(false)
 
 function openOrderReport() {
   orderReportError.value = null
@@ -500,11 +931,71 @@ async function submitOrderReport() {
       laboratory: reportForm.value.laboratory,
     })
     showOrderReport.value = false
-    await fetchAppointment()
+    await fetchAppointment(false)
   } catch (e) {
     orderReportError.value = e.message || 'Failed to order report.'
   } finally {
     orderingReport.value = false
+  }
+}
+
+// Edit Report
+function openEditReportModal(rp) {
+  editReportError.value = null
+  editReportForm.name = rp.name
+  editReportForm.title = rp.title || ''
+  editReportForm.report_type = rp.report_type || 'Lab'
+  editReportForm.description = rp.description || ''
+  editReportForm.laboratory = rp.laboratory || ''
+  showEditReportModal.value = true
+}
+
+async function handleEditReport() {
+  if (!editReportForm.title.trim()) {
+    editReportError.value = 'Report title is required.'
+    return
+  }
+  editingReport.value = true
+  editReportError.value = null
+  try {
+    await call('docbook.api.report.update_report', {
+      report: editReportForm.name,
+      title: editReportForm.title,
+      report_type: editReportForm.report_type,
+      description: editReportForm.description,
+      laboratory: editReportForm.laboratory,
+    })
+    showEditReportModal.value = false
+    await fetchAppointment(false)
+  } catch (e) {
+    editReportError.value = e.message || 'Failed to update report.'
+  } finally {
+    editingReport.value = false
+  }
+}
+
+// Delete Report
+function openDeleteReportModal(rp) {
+  deleteReportError.value = null
+  selectedReportForDelete.value = rp
+  showDeleteReportModal.value = true
+}
+
+async function handleDeleteReport() {
+  if (!selectedReportForDelete.value) return
+  deletingReport.value = true
+  deleteReportError.value = null
+  try {
+    await call('docbook.api.report.delete_report', {
+      report: selectedReportForDelete.value.name,
+    })
+    showDeleteReportModal.value = false
+    selectedReportForDelete.value = null
+    await fetchAppointment(false)
+  } catch (e) {
+    deleteReportError.value = e.message || 'Failed to delete report.'
+  } finally {
+    deletingReport.value = false
   }
 }
 
@@ -566,7 +1057,7 @@ async function submitReferral() {
       appointment_time: referForm.value.appointment_time,
     })
     showRefer.value = false
-    await fetchAppointment()
+    await fetchAppointment(false)
   } catch (e) {
     referError.value = e.message || 'Failed to create referral.'
   } finally {
@@ -574,7 +1065,122 @@ async function submitReferral() {
   }
 }
 
-onMounted(fetchAppointment)
+// Edit Referral
+function openEditReferralModal(ref) {
+  editReferralError.value = null
+  editReferralForm.name = ref.name
+  editReferralForm.reason = ref.reason || ''
+  editReferralForm.clinical_notes = ref.clinical_notes || ''
+  showEditReferralModal.value = true
+}
+
+async function handleEditReferral() {
+  if (!editReferralForm.reason.trim()) {
+    editReferralError.value = 'Referral reason is required.'
+    return
+  }
+  editingReferral.value = true
+  editReferralError.value = null
+  try {
+    await call('docbook.api.referral.update_referral', {
+      referral: editReferralForm.name,
+      reason: editReferralForm.reason,
+      clinical_notes: editReferralForm.clinical_notes,
+    })
+    showEditReferralModal.value = false
+    await fetchAppointment(false)
+  } catch (e) {
+    editReferralError.value = e.message || 'Failed to update referral.'
+  } finally {
+    editingReferral.value = false
+  }
+}
+
+// Cancel Referral
+async function cancelReferral(ref) {
+  if (!confirm(`Are you sure you want to cancel referral ${ref.name}?`)) return
+  cancellingReferral.value = true
+  try {
+    await call('docbook.api.referral.cancel_referral', {
+      referral: ref.name,
+    })
+    await fetchAppointment(false)
+  } catch (e) {
+    alert(e.message || 'Failed to cancel referral.')
+  } finally {
+    cancellingReferral.value = false
+  }
+}
+
+// Medical History Edit & Delete
+function openEditHistoryModal(item) {
+  editHistoryError.value = null
+  editHistoryForm.name = item.name
+  editHistoryForm.medical_condition = item.medical_condition || item.condition || ''
+  editHistoryForm.record_type = item.record_type || 'Medical Condition'
+  editHistoryForm.status = item.status || 'Active'
+  editHistoryForm.severity = item.severity || ''
+  editHistoryForm.description = item.description || ''
+  editHistoryForm.symptoms = item.symptoms || ''
+  editHistoryForm.allergies = item.allergies || ''
+  showEditHistoryModal.value = true
+}
+
+async function handleEditHistory() {
+  if (!editHistoryForm.medical_condition.trim()) {
+    editHistoryError.value = 'Condition name is required.'
+    return
+  }
+  editingHistory.value = true
+  editHistoryError.value = null
+  try {
+    await call('docbook.api.medical_history.update_medical_history_record', {
+      record_name: editHistoryForm.name,
+      medical_condition: editHistoryForm.medical_condition,
+      record_type: editHistoryForm.record_type,
+      status: editHistoryForm.status,
+      severity: editHistoryForm.severity,
+      description: editHistoryForm.description,
+      symptoms: editHistoryForm.symptoms,
+      allergies: editHistoryForm.allergies,
+    })
+    showEditHistoryModal.value = false
+    await fetchPatientHistory()
+  } catch (e) {
+    editHistoryError.value = e.message || 'Failed to update medical history.'
+  } finally {
+    editingHistory.value = false
+  }
+}
+
+function openDeleteHistoryModal(item) {
+  deleteHistoryError.value = null
+  selectedHistoryForDelete.value = item
+  showDeleteHistoryModal.value = true
+}
+
+async function handleDeleteHistory() {
+  if (!selectedHistoryForDelete.value) return
+  deletingHistory.value = true
+  deleteHistoryError.value = null
+  try {
+    await call('docbook.api.medical_history.delete_medical_history_record', {
+      record_name: selectedHistoryForDelete.value.name,
+    })
+    showDeleteHistoryModal.value = false
+    selectedHistoryForDelete.value = null
+    await fetchPatientHistory()
+  } catch (e) {
+    deleteHistoryError.value = e.message || 'Failed to delete medical history record.'
+  } finally {
+    deletingHistory.value = false
+  }
+}
+
+onMounted(() => {
+  fetchAppointment(true)
+})
+
 </script>
 
 <template>
@@ -594,7 +1200,7 @@ onMounted(fetchAppointment)
       <div v-else-if="error" class="db-error-panel">
         <span>⚠️</span>
         <span>{{ error }}</span>
-        <button class="db-btn db-btn--secondary" style="margin-left:auto;" @click="fetchAppointment">Retry</button>
+        <button class="db-btn db-btn--secondary" style="margin-left:auto;" @click="fetchAppointment(true)">Retry</button>
       </div>
 
       <template v-else-if="appointment">
@@ -618,6 +1224,20 @@ onMounted(fetchAppointment)
           <div class="section-head">
             <span class="section-icon">🩺</span>
             <h2 class="db-section-title">Consultation Notes</h2>
+            <div style="margin-left:auto; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <label class="ai-opt-toggle" title="Enable or disable optional AI suggestions">
+                <input type="checkbox" v-model="aiAutoSuggestEnabled" />
+                <span>AI Suggestions: <strong>{{ aiAutoSuggestEnabled ? 'Optional On' : 'Off' }}</strong></span>
+              </label>
+              <button
+                v-if="aiAutoSuggestEnabled"
+                class="db-btn db-btn--secondary"
+                :disabled="aiFilling"
+                @click="fillWithAi"
+              >
+                {{ aiFilling ? '✨ Analyzing…' : '✨ Generate AI Suggestions' }}
+              </button>
+            </div>
           </div>
 
           <div class="form-grid-2">
@@ -647,15 +1267,136 @@ onMounted(fetchAppointment)
             </div>
           </div>
 
+          <div v-if="aiFillError" class="db-error-panel" style="margin-bottom:12px;">
+            <span>⚠️ {{ aiFillError }}</span>
+          </div>
+
+          <!-- AI suggestions: prescription, reports, missing history -->
+          <div
+            v-if="aiAutoSuggestEnabled && aiSuggest && (visibleAiMedicines.length || visibleAiReports.length || aiSuggest.history_needed || dismissedMedicines.length || dismissedReports.length)"
+            class="ai-suggest-panel"
+          >
+            <div class="ai-suggest-head">
+              <strong>✨ AI suggestions</strong>
+              <button class="ai-suggest-clear" type="button" @click="clearAiSuggest">Dismiss all</button>
+            </div>
+
+            <!-- Doctor Prompt Refinement Box -->
+            <div class="ai-prompt-refine-box">
+              <label class="ai-prompt-label">💬 Adjust AI suggestions by typing a prompt:</label>
+              <div class="ai-prompt-row">
+                <input
+                  v-model="doctorAiPrompt"
+                  type="text"
+                  class="db-input ai-prompt-input"
+                  placeholder="e.g. 'Patient is allergic to penicillin', 'Change dose to 500mg', 'Add multivitamin'..."
+                  @keydown.enter.prevent="refineWithAi"
+                />
+                <button
+                  class="db-btn db-btn--primary db-btn--sm"
+                  type="button"
+                  :disabled="aiFilling || !doctorAiPrompt.trim()"
+                  @click="refineWithAi"
+                >
+                  {{ aiFilling ? 'Applying…' : '✨ Apply Prompt' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Dismissed restored strip -->
+            <div v-if="dismissedMedicines.length || dismissedReports.length" class="ai-dismissed-strip">
+              <span>{{ dismissedMedicines.length + dismissedReports.length }} suggestion(s) dismissed with minus (−)</span>
+              <button class="ai-restore-btn" type="button" @click="restoreDismissedSuggestions">
+                ↺ Restore dismissed
+              </button>
+            </div>
+
+            <div v-if="visibleAiMedicines.length" class="ai-suggest-group">
+              <h5>💊 Suggested prescription ({{ visibleAiMedicines.length }})</h5>
+              <div v-for="(m, i) in visibleAiMedicines" :key="'m' + i" class="ai-suggest-row">
+                <div class="ai-suggest-text">
+                  <strong>{{ m.medicine }}</strong>
+                  <span>
+                    {{ m.dosage }}
+                    <template v-if="m.frequency"> · {{ m.frequency }}</template>
+                    <template v-if="m.duration"> · {{ m.duration }}</template>
+                  </span>
+                  <em v-if="m.instructions">{{ m.instructions }}</em>
+                  <span v-if="m.in_catalog" class="ai-catalog-tag">in catalog</span>
+                </div>
+                <div class="ai-suggest-actions">
+                  <button class="db-btn db-btn--primary db-btn--sm" type="button" title="Prescribe this medicine" @click="useMedSuggestion(m)">
+                    ＋ Use (Prescribe)
+                  </button>
+                  <button class="ai-btn-dismiss" type="button" title="Dismiss this suggestion" @click="dismissMedSuggestion(m)">
+                    −
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="visibleAiReports.length" class="ai-suggest-group">
+              <h5>🧪 Suggested reports ({{ visibleAiReports.length }})</h5>
+              <div v-for="(r, i) in visibleAiReports" :key="'r' + i" class="ai-suggest-row">
+                <div class="ai-suggest-text">
+                  <strong>{{ r.test }}</strong>
+                  <em v-if="r.reason">{{ r.reason }}</em>
+                </div>
+                <div class="ai-suggest-actions">
+                  <button class="db-btn db-btn--primary db-btn--sm" type="button" title="Order this investigation" @click="useReportSuggestion(r)">
+                    ＋ Order
+                  </button>
+                  <button class="ai-btn-dismiss" type="button" title="Dismiss this suggestion" @click="dismissReportSuggestion(r)">
+                    −
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="aiSuggest.history_needed" class="ai-suggest-group">
+              <h5>📋 Medical history to record</h5>
+              <p class="ai-suggest-text"><em>{{ aiSuggest.history_needed }}</em></p>
+              <button class="db-btn db-btn--secondary" type="button" @click="showHistoryForm = true">
+                ＋ Add to history
+              </button>
+            </div>
+
+            <!-- Bottom Add All Suggestions Button -->
+            <div v-if="visibleAiMedicines.length || visibleAiReports.length" class="ai-suggest-bottom-bar">
+              <button
+                class="db-btn db-btn--primary db-btn--block"
+                type="button"
+                :disabled="addingAllSuggestions"
+                @click="addAllAiSuggestions"
+              >
+                {{ addingAllSuggestions ? 'Adding all items…' : '✨ Add All (' + visibleAiMedicines.length + ' Medicines & ' + visibleAiReports.length + ' Reports with One Click)' }}
+              </button>
+            </div>
+          </div>
+
+
           <div v-if="consultationError" class="db-error-panel" style="margin-bottom:12px;">
             <span>{{ consultationError }}</span>
           </div>
 
           <div class="section-footer">
+            <div v-if="aiFillApplied" class="success-msg">✨ AI suggestions applied — review before saving.</div>
             <div v-if="consultationSaved" class="success-msg">✅ Consultation saved!</div>
-            <button class="db-btn db-btn--primary" :disabled="savingConsultation" @click="saveConsultation">
-              {{ savingConsultation ? 'Saving…' : '💾 Save Consultation' }}
-            </button>
+            <div v-if="visitCompleted" class="success-msg">🎉 Visit completed — the patient can now see this consultation and its AI summary.</div>
+            <div v-if="completeError" class="db-error-panel" style="margin:0;">{{ completeError }}</div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <button class="db-btn db-btn--primary" :disabled="savingConsultation" @click="saveConsultation">
+                {{ savingConsultation ? 'Saving…' : '💾 Save Consultation' }}
+              </button>
+              <button
+                v-if="appointment && appointment.status !== 'Completed' && !visitCompleted"
+                class="db-btn db-btn--primary"
+                :disabled="completingVisit"
+                @click="completeVisit"
+              >
+                {{ completingVisit ? 'Completing…' : '✓ Complete Visit' }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -684,14 +1425,23 @@ onMounted(fetchAppointment)
               <div class="report-side">
                 <span class="report-status" :class="`report-status--${(rp.status || '').toLowerCase()}`">{{ rp.status }}</span>
                 <a v-if="rp.report_file" :href="rp.report_file" target="_blank" class="report-open">Open ↗</a>
+                <button class="icon-action-btn edit-btn" title="Edit report" @click="openEditReportModal(rp)">✏️</button>
+                <button class="icon-action-btn delete-btn" title="Delete report" @click="openDeleteReportModal(rp)">🗑️</button>
               </div>
             </div>
           </div>
           <p v-else class="report-empty">No reports ordered for this visit yet.</p>
 
           <div v-if="appointment.referral" class="refer-summary">
-            <div><strong>Referral:</strong> {{ appointment.referral.name }} → {{ appointment.referral.specialty || 'Specialist' }} · {{ appointment.referral.status }}</div>
+            <div>
+              <strong>Referral:</strong> {{ appointment.referral.name }} → {{ appointment.referral.specialty || 'Specialist' }} · {{ appointment.referral.status }}
+            </div>
             <div v-if="appointment.referral.reason"><strong>Reason:</strong> {{ appointment.referral.reason }}</div>
+            <div v-if="appointment.referral.clinical_notes"><strong>Notes:</strong> {{ appointment.referral.clinical_notes }}</div>
+            <div style="margin-top:10px; display:flex; gap:8px;">
+              <button class="db-btn db-btn--secondary db-btn--sm" @click="openEditReferralModal(appointment.referral)">✏️ Edit Referral</button>
+              <button class="db-btn db-btn--danger db-btn--sm" :disabled="cancellingReferral" @click="cancelReferral(appointment.referral)">🗑️ Cancel Referral</button>
+            </div>
           </div>
         </div>
 
@@ -699,17 +1449,46 @@ onMounted(fetchAppointment)
         <div class="db-card consult-section">
           <div class="section-head">
             <span class="section-icon">📋</span>
-            <h2 class="db-section-title">Add Medical History Record</h2>
+            <h2 class="db-section-title">Patient Medical History</h2>
             <button
               class="db-btn db-btn--ghost"
               style="margin-left:auto;"
               @click="showHistoryForm = !showHistoryForm"
             >
-              {{ showHistoryForm ? '▲ Collapse' : '+ Add Record' }}
+              {{ showHistoryForm ? '▲ Collapse Form' : '+ Add Record' }}
             </button>
           </div>
 
+          <!-- Existing medical history records list -->
+          <div v-if="loadingHistory" style="margin-bottom:12px;">
+            <div class="db-skeleton" style="height:44px; border-radius:8px;"></div>
+          </div>
+          <div v-else-if="patientHistory.length" class="history-list-box" style="margin-bottom:16px;">
+            <div v-for="h in patientHistory" :key="h.name" class="history-row-item">
+              <div class="history-row-main">
+                <div class="history-row-title">
+                  <strong>{{ h.medical_condition || h.condition }}</strong>
+                  <span class="db-badge db-badge--active">{{ h.record_type || 'Condition' }}</span>
+                  <span v-if="h.severity" class="db-badge db-badge--pending">{{ h.severity }}</span>
+                  <span class="history-status-tag" :class="`status-${(h.status || '').toLowerCase()}`">{{ h.status || 'Active' }}</span>
+                </div>
+                <p v-if="h.description" class="history-row-desc">{{ h.description }}</p>
+                <div class="history-row-meta">
+                  <span v-if="h.symptoms">Symptoms: {{ h.symptoms }}</span>
+                  <span v-if="h.allergies">Allergies: {{ h.allergies }}</span>
+                  <span v-if="h.record_date">Date: {{ h.record_date }}</span>
+                </div>
+              </div>
+              <div class="history-row-actions">
+                <button class="icon-action-btn edit-btn" title="Edit history record" @click="openEditHistoryModal(h)">✏️</button>
+                <button class="icon-action-btn delete-btn" title="Delete record" @click="openDeleteHistoryModal(h)">🗑️</button>
+              </div>
+            </div>
+          </div>
+          <p v-else class="report-empty" style="margin-bottom:16px;">No medical history recorded for this patient yet.</p>
+
           <div v-if="historySaved" class="success-msg" style="margin-bottom: 12px;">✅ History record saved!</div>
+
 
           <div v-if="showHistoryForm">
             <div class="form-grid-2">
@@ -1221,8 +2000,187 @@ onMounted(fetchAppointment)
         </div>
       </div>
     </div>
+
+    <!-- ======= EDIT REPORT MODAL ======= -->
+    <div v-if="showEditReportModal" class="modal-overlay" @click.self="showEditReportModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">✏️ Edit Report</h3>
+          <button class="modal-close" @click="showEditReportModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid-2">
+            <div class="db-form-group">
+              <label class="db-label">Report Type</label>
+              <select v-model="editReportForm.report_type" class="db-select">
+                <option v-for="t in reportTypes" :key="t" :value="t">{{ t }}</option>
+              </select>
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Laboratory / Provider</label>
+              <input v-model="editReportForm.laboratory" type="text" class="db-input" placeholder="e.g. In-house lab" />
+            </div>
+          </div>
+          <div class="db-form-group">
+            <label class="db-label">Title *</label>
+            <input v-model="editReportForm.title" type="text" class="db-input" placeholder="Report title" />
+          </div>
+          <div class="db-form-group">
+            <label class="db-label">Description / Instructions</label>
+            <textarea v-model="editReportForm.description" class="db-textarea" rows="2"></textarea>
+          </div>
+          <div v-if="editReportError" class="db-error-panel">{{ editReportError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showEditReportModal = false">Cancel</button>
+          <button class="db-btn db-btn--primary" :disabled="editingReport" @click="handleEditReport">
+            {{ editingReport ? 'Saving…' : '💾 Save Changes' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= DELETE REPORT MODAL ======= -->
+    <div v-if="showDeleteReportModal" class="modal-overlay" @click.self="showDeleteReportModal = false">
+      <div class="modal-card modal-card--sm">
+        <div class="modal-header">
+          <h3 class="modal-title">🗑️ Delete Report</h3>
+          <button class="modal-close" @click="showDeleteReportModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-confirm-text">
+            Are you sure you want to delete report <strong>{{ selectedReportForDelete?.title }}</strong>?
+          </p>
+          <div v-if="deleteReportError" class="db-error-panel">{{ deleteReportError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showDeleteReportModal = false">Cancel</button>
+          <button class="db-btn db-btn--danger" :disabled="deletingReport" @click="handleDeleteReport">
+            {{ deletingReport ? 'Deleting…' : '🗑️ Delete Report' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= EDIT REFERRAL MODAL ======= -->
+    <div v-if="showEditReferralModal" class="modal-overlay" @click.self="showEditReferralModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">✏️ Edit Referral Details</h3>
+          <button class="modal-close" @click="showEditReferralModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="db-form-group">
+            <label class="db-label">Reason for Referral *</label>
+            <textarea v-model="editReferralForm.reason" class="db-textarea" rows="2"></textarea>
+          </div>
+          <div class="db-form-group">
+            <label class="db-label">Clinical Notes</label>
+            <textarea v-model="editReferralForm.clinical_notes" class="db-textarea" rows="2"></textarea>
+          </div>
+          <div v-if="editReferralError" class="db-error-panel">{{ editReferralError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showEditReferralModal = false">Cancel</button>
+          <button class="db-btn db-btn--primary" :disabled="editingReferral" @click="handleEditReferral">
+            {{ editingReferral ? 'Saving…' : '💾 Save Changes' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= EDIT MEDICAL HISTORY MODAL ======= -->
+    <div v-if="showEditHistoryModal" class="modal-overlay" @click.self="showEditHistoryModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 class="modal-title">✏️ Edit Medical History</h3>
+          <button class="modal-close" @click="showEditHistoryModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-grid-2">
+            <div class="db-form-group">
+              <label class="db-label">Medical Condition *</label>
+              <input v-model="editHistoryForm.medical_condition" type="text" class="db-input" />
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Record Type</label>
+              <select v-model="editHistoryForm.record_type" class="db-select">
+                <option>Medical Condition</option>
+                <option>Allergy</option>
+                <option>Chronic Disease</option>
+                <option>Surgery</option>
+                <option>Vaccination</option>
+                <option>Lab Result</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Status</label>
+              <select v-model="editHistoryForm.status" class="db-select">
+                <option>Active</option>
+                <option>Resolved</option>
+                <option>Chronic</option>
+                <option>Inactive</option>
+              </select>
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Severity</label>
+              <select v-model="editHistoryForm.severity" class="db-select">
+                <option value="">— Select —</option>
+                <option>Mild</option>
+                <option>Moderate</option>
+                <option>Severe</option>
+                <option>Critical</option>
+              </select>
+            </div>
+            <div class="db-form-group" style="grid-column: 1 / -1;">
+              <label class="db-label">Description</label>
+              <textarea v-model="editHistoryForm.description" class="db-textarea" rows="2"></textarea>
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Symptoms</label>
+              <input v-model="editHistoryForm.symptoms" type="text" class="db-input" />
+            </div>
+            <div class="db-form-group">
+              <label class="db-label">Allergies</label>
+              <input v-model="editHistoryForm.allergies" type="text" class="db-input" />
+            </div>
+          </div>
+          <div v-if="editHistoryError" class="db-error-panel">{{ editHistoryError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showEditHistoryModal = false">Cancel</button>
+          <button class="db-btn db-btn--primary" :disabled="editingHistory" @click="handleEditHistory">
+            {{ editingHistory ? 'Saving…' : '💾 Save Changes' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ======= DELETE MEDICAL HISTORY MODAL ======= -->
+    <div v-if="showDeleteHistoryModal" class="modal-overlay" @click.self="showDeleteHistoryModal = false">
+      <div class="modal-card modal-card--sm">
+        <div class="modal-header">
+          <h3 class="modal-title">🗑️ Delete Medical History Record</h3>
+          <button class="modal-close" @click="showDeleteHistoryModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-confirm-text">
+            Are you sure you want to delete medical history record <strong>{{ selectedHistoryForDelete?.medical_condition || selectedHistoryForDelete?.condition }}</strong>?
+          </p>
+          <div v-if="deleteHistoryError" class="db-error-panel">{{ deleteHistoryError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="db-btn db-btn--secondary" @click="showDeleteHistoryModal = false">Cancel</button>
+          <button class="db-btn db-btn--danger" :disabled="deletingHistory" @click="handleDeleteHistory">
+            {{ deletingHistory ? 'Deleting…' : '🗑️ Delete Record' }}
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
 
 <style scoped>
 .db-page {
@@ -1653,4 +2611,185 @@ onMounted(fetchAppointment)
 .report-open { font-size: 13px; font-weight: 700; color: #0d9488; text-decoration: none; }
 .report-empty { font-size: 13px; color: #94a3b8; text-align: left; margin: 4px 0 12px; }
 .refer-summary { margin-top: 12px; padding: 12px 14px; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 10px; font-size: 13px; color: #134e4a; display: flex; flex-direction: column; gap: 6px; }
+
+/* AI assist: fill + suggestions */
+.ai-suggest-panel { border: 1px solid #99f6e4; background: #f0fdfa; border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; }
+.ai-suggest-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; font-size: 13px; color: #0f766e; }
+.ai-suggest-clear { border: none; background: transparent; color: #0d9488; font-size: 12px; font-weight: 700; cursor: pointer; font-family: inherit; }
+.ai-suggest-group { margin-bottom: 10px; }
+.ai-suggest-group h5 { font-size: 11.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #134e4a; margin: 0 0 6px; }
+.ai-suggest-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; margin-bottom: 6px; }
+.ai-suggest-text { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: #334155; min-width: 0; }
+.ai-suggest-text strong { color: #0f172a; }
+.ai-suggest-text em { font-style: normal; font-size: 12px; color: #64748b; }
+.ai-catalog-tag { font-size: 10.5px; font-weight: 700; color: #0d9488; background: #ccfbf1; border-radius: 999px; padding: 1px 8px; align-self: flex-start; margin-top: 2px; }
+.ai-suggest-hint { font-size: 11.5px; color: #64748b; margin: 4px 0 0; }
+
+.ai-suggest-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ai-btn-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ai-btn-dismiss:hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+  color: #dc2626;
+}
+
+.ai-dismissed-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.ai-restore-btn {
+  background: none;
+  border: none;
+  color: #0d9488;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.ai-restore-btn:hover {
+  text-decoration: underline;
+}
+
+.ai-opt-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #475569;
+  cursor: pointer;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 6px 12px;
+  border-radius: 999px;
+  user-select: none;
+}
+.ai-opt-toggle input {
+  accent-color: #0d9488;
+  cursor: pointer;
+}
+
+.ai-prompt-refine-box {
+  background: #ffffff;
+  border: 1px solid #ccfbf1;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+.ai-prompt-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: #0f766e;
+  margin-bottom: 6px;
+}
+.ai-prompt-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ai-prompt-input {
+  flex: 1;
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.ai-suggest-bottom-bar {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed #99f6e4;
+}
+.db-btn--block {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Patient Medical History list */
+.history-list-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.history-row-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+.history-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.history-row-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: #0f172a;
+}
+.history-status-tag {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #475569;
+}
+.history-status-tag.status-active { background: #d1fae5; color: #065f46; }
+.history-status-tag.status-resolved { background: #dbeafe; color: #1e40af; }
+.history-status-tag.status-chronic { background: #fef3c7; color: #92400e; }
+.history-row-desc {
+  font-size: 13px;
+  color: #475569;
+  margin: 4px 0 0;
+}
+.history-row-meta {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: #64748b;
+  margin-top: 4px;
+}
+.history-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 </style>
+

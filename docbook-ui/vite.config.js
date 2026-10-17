@@ -9,7 +9,11 @@ export default defineConfig({
   server: {
     port: 8080,
     proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true }
+      '/api': { target: 'http://localhost:8000', changeOrigin: true },
+      // QR passes and uploaded files are served by Frappe from /files —
+      // without this proxy they 404 on the dev server and the QR breaks.
+      '/files': { target: 'http://localhost:8000', changeOrigin: true },
+      '/assets': { target: 'http://localhost:8000', changeOrigin: true },
     }
   }
 })

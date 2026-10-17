@@ -12,7 +12,7 @@ const router = useRouter();
 const appointments = ref([]);
 const loading = ref(false);
 const error = ref(null);
-const activeTab = ref("all");
+const activeTab = ref("upcoming");
 const searchQuery = ref("");
 
 // Reschedule Modal
@@ -37,6 +37,70 @@ const reviewFeedback = ref("");
 const submittingReview = ref(false);
 const myReviews = ref({});
 const existingReviewView = ref(null);
+
+// AI Summary (completed appointments only)
+const showAiSummaryModal = ref(false);
+const aiSummaryLoading = ref(false);
+const aiSummaryError = ref(null);
+const aiSummary = ref(null);
+const aiSummaryAppt = ref(null);
+
+// QR Pass Modal
+const showQrModal = ref(false);
+const qrAppt = ref(null);
+const qrLoading = ref(false);
+const qrDataUrl = ref(null);
+const qrError = ref(null);
+
+async function openQrModal(appt) {
+  qrAppt.value = appt;
+  showQrModal.value = true;
+  qrLoading.value = true;
+  qrError.value = null;
+  qrDataUrl.value = appt.qr_data_url || appt.qr_code || null;
+  try {
+    const res = await call("docbook.api.appointment.generate_qr_code", {
+      appointment_id: appt.name,
+    });
+    qrDataUrl.value = res?.qr_data_url || res?.qr_code || qrDataUrl.value;
+  } catch (err) {
+    if (!qrDataUrl.value) {
+      qrError.value = err.message || "Unable to load QR pass.";
+    }
+  } finally {
+    qrLoading.value = false;
+  }
+}
+
+function downloadQrPass() {
+  if (!qrDataUrl.value) return;
+  const link = document.createElement("a");
+  link.href = qrDataUrl.value;
+  link.download = `QR-${qrAppt.value?.name || "pass"}.png`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+async function openAiSummary(appt) {
+  aiSummaryAppt.value = appt;
+  showAiSummaryModal.value = true;
+  aiSummaryLoading.value = true;
+  aiSummaryError.value = null;
+  aiSummary.value = null;
+  try {
+    aiSummary.value = await call("docbook.api.prescription.ai_generate_summary", {
+      appointment: appt.name,
+    });
+    if (!aiSummary.value?.summary && !aiSummary.value?.key_points?.length) {
+      aiSummaryError.value = "AI could not generate a summary right now. Please try again.";
+    }
+  } catch (err) {
+    aiSummaryError.value = err.message || "AI summary failed. Please try again.";
+  } finally {
+    aiSummaryLoading.value = false;
+  }
+}
 
 const tabs = [
   { key: "all", label: "All" },
@@ -474,61 +538,186 @@ onMounted(() => {
 
             <!-- Actions Footer -->
             <div class="card-actions">
-              <button
-                class="btn-action btn-action--view"
-                @click="router.push(`/show-appointment/${appt.name}`)"
-              >
-                <span class="lucide-file-text"></span>
-                View Full Details
-              </button>
+              <div class="card-actions-primary">
+                <button
+                  class="btn-action btn-action--view"
+                  @click="router.push(`/show-appointment/${appt.name}`)"
+                >
+                  <span class="lucide-file-text"></span>
+                  View Full Details
+                </button>
 
-              <!-- Reschedule (if not completed/cancelled) -->
-              <button
-                v-if="!['Completed', 'Cancelled'].includes(appt.status)"
-                class="btn-action btn-action--reschedule"
-                @click="openReschedule(appt)"
-              >
-                <span class="lucide-calendar-clock"></span>
-                Reschedule
-              </button>
+                <!-- QR Pass (if not completed/cancelled) -->
+                <button
+                  v-if="!['Completed', 'Cancelled'].includes(appt.status)"
+                  class="btn-action btn-action--qr"
+                  title="View and download Check-in QR pass"
+                  @click="openQrModal(appt)"
+                >
+                  ▦ QR Pass
+                </button>
 
-              <!-- Cancel -->
-              <button
-                v-if="!['Completed', 'Cancelled'].includes(appt.status)"
-                class="btn-action btn-action--cancel"
-                :disabled="cancelling === appt.name"
-                @click="cancelAppointment(appt)"
-              >
-                ✕ Cancel
-              </button>
+                <!-- AI Summary (completed appointments only) -->
+                <button
+                  v-if="appt.status === 'Completed'"
+                  class="btn-action btn-action--ai"
+                  :disabled="aiSummaryLoading"
+                  @click="openAiSummary(appt)"
+                >
+                  🤖 AI Summary
+                </button>
+              </div>
 
-              <!-- Delete (if cancelled or pending) -->
-              <button
-                v-if="appt.status !== 'Completed'"
-                class="btn-action btn-action--delete"
-                :disabled="deleting === appt.name"
-                @click="deleteAppointment(appt)"
-                title="Delete Appointment"
-              >
-                🗑️
-              </button>
+              <div class="card-actions-secondary">
+                <!-- Reschedule (if not completed/cancelled) -->
+                <button
+                  v-if="!['Completed', 'Cancelled'].includes(appt.status)"
+                  class="btn-action btn-action--reschedule"
+                  @click="openReschedule(appt)"
+                >
+                  <span class="lucide-calendar-clock"></span>
+                  Reschedule
+                </button>
 
-              <!-- Review (completed appointments only) -->
-              <button
-                v-if="appt.status === 'Completed'"
-                class="btn-action btn-action--review"
-                :class="{ 'is-reviewed': hasReview(appt) }"
-                @click="openReview(appt)"
-              >
-                <span class="lucide-star"></span>
-                {{ hasReview(appt) ? 'Reviewed' : 'Write Review' }}
-              </button>
+                <!-- Cancel -->
+                <button
+                  v-if="!['Completed', 'Cancelled'].includes(appt.status)"
+                  class="btn-action btn-action--cancel"
+                  :disabled="cancelling === appt.name"
+                  @click="cancelAppointment(appt)"
+                >
+                  ✕ Cancel
+                </button>
+
+                <!-- Review (completed appointments only) -->
+                <button
+                  v-if="appt.status === 'Completed'"
+                  class="btn-action btn-action--review"
+                  :class="{ 'is-reviewed': hasReview(appt) }"
+                  @click="openReview(appt)"
+                >
+                  <span class="lucide-star"></span>
+                  {{ hasReview(appt) ? 'Reviewed' : 'Write Review' }}
+                </button>
+
+                <!-- Delete (if cancelled or pending) -->
+                <button
+                  v-if="appt.status !== 'Completed'"
+                  class="btn-action btn-action--delete"
+                  :disabled="deleting === appt.name"
+                  @click="deleteAppointment(appt)"
+                  title="Delete Appointment"
+                >
+                  🗑️
+                </button>
+              </div>
             </div>
           </article>
         </div>
 
       </div>
 
+    </div>
+
+    <!-- QR Pass Modal -->
+    <div v-if="showQrModal" class="modal-backdrop" @click.self="showQrModal = false">
+      <div class="modal-card qr-modal-card" style="max-width: 440px; text-align: center;">
+        <div class="modal-header">
+          <div>
+            <h3 style="font-weight: 700; font-size: 18px;">Check-in QR Pass</h3>
+            <p class="text-xs text-slate-500">
+              Appointment #{{ qrAppt?.name }} · {{ formatDate(qrAppt?.appointment_date) }}
+            </p>
+          </div>
+          <button class="close-btn" @click="showQrModal = false">✕</button>
+        </div>
+        <div class="modal-body" style="padding: 24px 20px; display: flex; flex-direction: column; align-items: center; gap: 14px;">
+          <div v-if="qrLoading" class="ai-loading">Generating QR code…</div>
+          <div v-else-if="qrError" class="modal-error">{{ qrError }}</div>
+          <div v-else-if="qrDataUrl" style="background: #ffffff; padding: 16px; border-radius: 14px; border: 1px solid #e2e8f0; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+            <img :src="qrDataUrl" alt="Appointment QR Pass" style="width: 240px; height: 240px; object-fit: contain; display: block;" />
+          </div>
+          <p style="font-size: 13px; color: #64748b; margin: 0; line-height: 1.4;">
+            Show this pass to the receptionist or scan at the self-check-in kiosk when arriving at the clinic.
+          </p>
+          <div style="display: flex; gap: 10px; width: 100%; margin-top: 8px;">
+            <button
+              class="primary-btn"
+              style="flex: 1; padding: 10px 16px; font-size: 14px; font-weight: 600;"
+              :disabled="!qrDataUrl"
+              @click="downloadQrPass"
+            >
+              ⬇ Download PNG
+            </button>
+            <button
+              class="btn-action"
+              style="padding: 10px 16px; font-size: 14px;"
+              @click="showQrModal = false"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- AI Summary Modal -->
+    <div v-if="showAiSummaryModal" class="modal-backdrop" @click.self="showAiSummaryModal = false">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div>
+            <h3>🤖 AI Consultation Summary</h3>
+            <p class="text-xs text-slate-500">
+              Appointment #{{ aiSummaryAppt?.name }}
+              <template v-if="aiSummaryAppt?.appointment_date">
+                · {{ formatDate(aiSummaryAppt.appointment_date) }}
+              </template>
+            </p>
+          </div>
+          <button class="close-btn" @click="showAiSummaryModal = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="aiSummaryLoading" class="ai-loading">
+            <span class="ai-spinner"></span>
+            Generating a patient-friendly summary…
+          </div>
+          <div v-else-if="aiSummaryError" class="modal-error">{{ aiSummaryError }}</div>
+          <template v-else-if="aiSummary">
+            <p v-if="aiSummary.summary" class="ai-summary-text">{{ aiSummary.summary }}</p>
+            <div v-if="aiSummary.key_points && aiSummary.key_points.length" class="ai-block">
+              <h4>Key Points</h4>
+              <ul>
+                <li v-for="(k, i) in aiSummary.key_points" :key="'k' + i">{{ k }}</li>
+              </ul>
+            </div>
+            <div v-if="aiSummary.next_steps && aiSummary.next_steps.length" class="ai-block">
+              <h4>Next Steps</h4>
+              <ul>
+                <li v-for="(n, i) in aiSummary.next_steps" :key="'n' + i">{{ n }}</li>
+              </ul>
+            </div>
+            <div v-if="aiSummary.medicines && aiSummary.medicines.length" class="ai-block">
+              <h4>Medicines</h4>
+              <ul>
+                <li v-for="(m, i) in aiSummary.medicines" :key="'m' + i">
+                  {{ m.prescribed_medicine_name || 'Medicine' }} — {{ m.dosage }}
+                  <template v-if="m.frequency"> · {{ m.frequency }}</template>
+                </li>
+              </ul>
+            </div>
+            <p class="ai-note">
+              AI-generated summary — for guidance only. Always follow your doctor's advice.
+            </p>
+          </template>
+          <button
+            class="btn-action"
+            style="margin-top: 14px;"
+            @click="showAiSummaryModal = false"
+          >
+            Close
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Reschedule Modal -->
@@ -924,11 +1113,25 @@ onMounted(() => {
 
 .card-actions {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
   margin-top: auto;
-  padding-top: 10px;
+  padding-top: 12px;
   border-top: 1px solid #f1f5f9;
+  width: 100%;
+}
+
+.card-actions-primary,
+.card-actions-secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+.card-actions-secondary {
+  justify-content: flex-end;
 }
 
 .btn-action {
@@ -943,12 +1146,14 @@ onMounted(() => {
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.15s;
+  white-space: nowrap;
 }
 
 .btn-action--view {
   background: #0d9488;
   color: white;
   flex: 1;
+  min-width: 130px;
 }
 .btn-action--view:hover { background: #0f766e; }
 
@@ -988,6 +1193,46 @@ onMounted(() => {
 
 /* Review modal */
 .review-modal .modal-body { text-align: center; }
+
+.btn-action--qr {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+.btn-action--qr:hover { background: #dbeafe; }
+
+/* ---------- AI Summary (completed appointments) ---------- */
+.btn-action--ai {
+  background: #f0fdfa;
+  color: #0f766e;
+  border: 1px solid #99f6e4;
+}
+.btn-action--ai:hover { background: #ccfbf1; }
+.btn-action--ai:disabled { opacity: 0.6; cursor: wait; }
+.ai-loading { display: flex; align-items: center; gap: 10px; color: #64748b; font-size: 13px; padding: 8px 0; }
+.ai-spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #cbd5e1; border-top-color: #0d9488;
+  animation: ai-spin 0.8s linear infinite; display: inline-block;
+}
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+.ai-summary-text {
+  font-size: 14px; line-height: 1.6; color: #0f172a; background: #f8fafc;
+  border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px 14px; margin: 0 0 14px;
+  text-align: left;
+}
+.ai-block { margin-bottom: 14px; text-align: left; }
+.ai-block h4 {
+  font-size: 12px; font-weight: 800; color: #0d9488; margin: 0 0 6px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.ai-block ul { margin: 0; padding-left: 18px; font-size: 13px; color: #334155; }
+.ai-block li { margin-bottom: 4px; }
+.ai-note {
+  font-size: 11.5px; color: #92400e; background: #fffbeb;
+  border: 1px solid #fde68a; border-radius: 8px; padding: 8px 10px; margin: 0;
+  text-align: left;
+}
 .star-rating {
   display: flex;
   justify-content: center;
